@@ -16,7 +16,7 @@
 #define PIN_MSW_A_OUT    D5   
 #define PIN_MSW_B_OUT    D6   
 
-// Analog Inputs (scaled to 3.3 V externally)
+// Analog Inputs (scaled to 3.3 V externally)
 #define PIN_SWITCH_CURRENT       A3
 #define PIN_SWITCH_VOLTAGE       A6
 #define PIN_TEMP_1               A2

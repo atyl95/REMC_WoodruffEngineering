@@ -3,6 +3,8 @@
 #include "SharedRing.h"
 #include "UdpManager.h"
 #include "SampleCollector.h"
+#include "StateManager.h"
+#include "ActuatorManager.h"
 #include "SDRAM.h"
 
 void setup() { 
@@ -22,15 +24,22 @@ void setup() {
     while(1); // Halt on initialization failure
   }
 
+  // Initialize Actuator Manager
+  Serial.println(F("[Serial Core] ActuatorManager init"));
+  ActuatorManager::init();
+  
+  // Initialize State Manager
+  Serial.println(F("[Serial Core] StateManager init"));
+  StateManager::init();
+
   // Initialize UDP Manager
   Serial.println(F("[Serial Core] UdpManager init"));
   UdpManager::init();
 
   // Starts Sampling Core (1)
   RPC.begin();
-  
   Serial.println(F("[Serial Core] Ready - call startGathering() to begin"));
-  SampleCollector::startGathering();
+
 }
 
 void loop() {
@@ -38,11 +47,15 @@ void loop() {
   // Print RPC messages from M4 Core
   DEBUG_printRPCMessages();
   
+  // Update State Manager (actuator control FSM)
+  StateManager::update();
+  
   // Process samples (main sample collection logic)
   SampleCollector::update();
   
   // Handle incoming UDP commands
-  UdpManager::update();}
+  UdpManager::update();
+}
 
 // ===== DEBUG FUNCTIONS FROM M4 CORE =====
 void DEBUG_printRPCMessages() {

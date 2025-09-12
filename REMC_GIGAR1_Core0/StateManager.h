@@ -38,7 +38,7 @@ namespace StateManager {
   // Auto‐mode commands
   void requestArm();                 // IDLE → ARM sequence
   void requestDisarm();              // Force reset to IDLE
-  void triggerSoftwareActuate();     // UDP “FIRE SWITCH” button
+  void triggerSoftwareActuate();     // UDP "FIRE SWITCH" button
 
   void manualActuatorControl(ActuatorMoveState moveCmd);
   void manualEMEnable();
@@ -62,9 +62,9 @@ namespace StateManager {
   bool isManualModeActive();
 
   // ─── New error flags ────────────────────────────────────────────────────────
-  // Bit 0: ARM → MSW_A never triggered within timeout   (“Arm‐timeout”)
-  // Bit 1: PULL‐BACK → MSW_B never triggered within timeout   (“Pull‐back timeout”)
-  // Bit 2: EM Retention lost while “armed”   (“Retain‐fail”)
+  // Bit 0: ARM → MSW_A never triggered within timeout   ("Arm‐timeout")
+  // Bit 1: PULL‐BACK → MSW_B never triggered within timeout   ("Pull‐back timeout")
+  // Bit 2: EM Retention lost while "armed"   ("Retain‐fail")
   uint8_t getErrorFlags();           // returns 0–7, each bit is one of the above
 }
 

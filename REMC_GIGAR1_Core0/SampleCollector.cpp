@@ -1,6 +1,5 @@
 #include "SampleCollector.h"
 #include "UdpManager.h"
-#include "Logger.h"
 #include "SDRAM.h"
 
 // Static member definitions
@@ -54,21 +53,19 @@ void SampleCollector::update() {
     size_t count = SharedRing_Consume(sampleBuffer, MAX_FETCH);
     if (count > 0 && gatheringActive) {
         processSamples(count);
+        // Show status occasionally
+        static uint32_t debug_counter = 0;
+        debug_counter++;
+        if (debug_counter % 20000 == 0) {
+            Serial.print("Overruns:");
+            Serial.print(g_ring.overruns);
+            Serial.print(" STORED:");
+            Serial.print(SampleCollector::getSamplesStored());
+            Serial.print("/");
+            Serial.println(SampleCollector::getStorageCapacity());
+        }
     }
 
-    // Show status occasionally
-    static uint32_t debug_counter = 0;
-    debug_counter++;
-    if (debug_counter % 20000 == 0) {
-        Serial.print("Overruns:");
-        Serial.print(g_ring.overruns);
-        Serial.print(" GATHERING:");
-        Serial.print(SampleCollector::isGathering() ? "YES" : "NO");
-        Serial.print(" STORED:");
-        Serial.print(SampleCollector::getSamplesStored());
-        Serial.print("/");
-        Serial.println(SampleCollector::getStorageCapacity());
-    }
 
 }
 
