@@ -1,0 +1,40 @@
+# Python virtual environment
+venv/
+env/
+.venv/
+.env/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Timing analysis output files
+*.png
+timing_analysis/*.png
+
+# CSV data dumps
+*.csv
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Arduino build files
+*.hex
+*.elf
+*.map
+build/

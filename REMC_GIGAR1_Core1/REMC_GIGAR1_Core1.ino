@@ -27,27 +27,32 @@ const uint16_t TEMP_DIVIDER_THRESHOLD = 10000;
 uint16_t tempSampleCounter = TEMP_DIVIDER_THRESHOLD;
 
 void push_sample() {
-
-  // Read inputs (mbed returns 0..65535, shift to 12-bit scale)
-  g_switchCurrentRaw = ain_switchCurrent.read_u16() >> 4;
-  g_switchVoltageRaw = ain_switchVoltage.read_u16() >> 4;
-  g_outputVoltageARaw = ain_outA.read_u16() >> 4;
-  g_outputVoltageBRaw = ain_outB.read_u16() >> 4;
-
-  // Throttle temperature read
+  // Capture timestamp FIRST for maximum accuracy
+  uint32_t sample_time = micros();
+  
+  // Read all ADC inputs in sequence (minimize timing variation)
+  uint16_t swI_raw = ain_switchCurrent.read_u16() >> 4;
+  uint16_t swV_raw = ain_switchVoltage.read_u16() >> 4;
+  uint16_t outA_raw = ain_outA.read_u16() >> 4;
+  uint16_t outB_raw = ain_outB.read_u16() >> 4;
+  
+  // Throttle temperature read (avoid conditional execution timing variation)
+  uint16_t temp_raw = g_temp1Raw; // Use previous value by default
   tempSampleCounter++;
   if (tempSampleCounter >= TEMP_DIVIDER_THRESHOLD) {
-    g_temp1Raw = ain_temp1.read_u16() >> 4;
+    temp_raw = ain_temp1.read_u16() >> 4;
     tempSampleCounter = 0;
   }
-
+  
+  // Build sample struct efficiently
   Sample s;
-  s.swI   = g_switchCurrentRaw;
-  s.swV   = g_switchVoltageRaw;
-  s.outA  = g_outputVoltageARaw;
-  s.outB  = g_outputVoltageBRaw;
-  s.t1    = g_temp1Raw;
-  s.t_us = micros();
+  s.swI = swI_raw;
+  s.swV = swV_raw;
+  s.outA = outA_raw;
+  s.outB = outB_raw;
+  s.t1 = temp_raw;
+  s.t_us = sample_time;
+  
   SharedRing_Add(s);
 }
 
@@ -82,17 +87,36 @@ void setup() {
 }
 
 
-constexpr uint32_t SAMPLE_RATE_US = 100;
-constexpr uint32_t OVERHEAD_US = 2;
-void loop() {
-  uint32_t loop_start_us = micros();
-  push_sample();
-  uint32_t loop_end_us = micros();
+constexpr uint32_t SAMPLE_INTERVAL_US = 100;
 
-  int32_t remain = (int32_t)SAMPLE_RATE_US
-                - (int32_t)(loop_end_us - loop_start_us)
-                - (int32_t)OVERHEAD_US;
-  if (remain > 0) {
-    delayMicroseconds((uint32_t)remain);
+// Pre-calculated timing for better precision
+static uint32_t next_sample_time = 0;
+static bool first_sample = true;
+
+void loop() {
+  // Wait for precise timing at the start of loop (eliminates loop overhead)
+  while ((int32_t)(micros() - next_sample_time) < 0) {
+    // Busy wait for precise timing
+    __asm volatile("nop");
+  }
+  
+  uint32_t current_time = micros();
+  
+  // Initialize timing on first sample
+  if (first_sample) {
+    next_sample_time = current_time + SAMPLE_INTERVAL_US;
+    first_sample = false;
+    return; // Skip first sample to establish timing baseline
+  }
+  
+  // Sample immediately when timing is met (no additional time checks)
+  push_sample();
+  
+  // Schedule next sample time (accumulative to prevent drift)
+  next_sample_time += SAMPLE_INTERVAL_US;
+  
+  // Handle case where we're running behind (skip missed samples)
+  if ((int32_t)(current_time - next_sample_time) > (int32_t)SAMPLE_INTERVAL_US) {
+    next_sample_time = current_time + SAMPLE_INTERVAL_US;
   }
 }
