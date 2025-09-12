@@ -22,13 +22,13 @@ except ImportError:
 # Network and multicast settings
 MULTICAST_GROUP_TELEM = '239.9.9.33'  # Multicast IP for telemetry.
 MULTICAST_GROUP_CMND = '239.9.9.32'
-MULTICAST_INTERFACE_IP = '192.168.1.10'  # Local IP to send/receive multicast (PC's IP, on subnet 255.255.255.0)
+MULTICAST_INTERFACE_IP = '192.168.1.51'  # Local IP to send/receive multicast (PC's IP, on subnet 255.255.255.0)
 LISTEN_IP_FOR_BIND = '0.0.0.0'  # IP to listen on (0.0.0.0 = all).
 PORT_TELEM = 13013  # UDP port for telemetry.
 PORT_CMND = 13012
 
 # Flask web server settings
-WEB_SERVER_HOST = '192.168.1.10'  # IP for the web dashboard.
+WEB_SERVER_HOST = '192.168.1.51'  # IP for the web dashboard.
 WEB_SERVER_PORT = 5002  # Port for the web dashboard.
 DATA_LOGGING_INTERVAL_SECONDS = 0.0001  # Data logging interval (seconds).
 MAX_CSV_BYTES = 1 * 1024 * 1024 * 1024  # 1 GiB hard cap
@@ -40,10 +40,9 @@ MAX_RECORDS_IN_RAM = (1 * 1024 * 1024 * 1024) // BYTES_PER_RECORD_EST
 # --- Packet Structure Definitions ---
 # Neutrino framing
 HEADER_SIZE = 64
-# Legacy: 5 floats (20 bytes) + 6 bytes = 26 bytes payload  
-# Current: 5 floats (20 bytes) + uint32 (4 bytes) + 6 bytes = 30 bytes payload
-DATA_PAYLOAD_SIZE = (5 * 4) + (6 * 1)  # Legacy 26-byte format
-EXPECTED_PAYLOAD_SIZE = HEADER_SIZE + DATA_PAYLOAD_SIZE  # For legacy compatibility
+# 5 floats (20 bytes) + 6 bytes = 26 bytes payload
+DATA_PAYLOAD_SIZE = (5 * 4) + (6 * 1)
+EXPECTED_PAYLOAD_SIZE = HEADER_SIZE + DATA_PAYLOAD_SIZE
 
 NEUTRINO_HEADER_FORMAT = '>IIII16s16sIIQ'
 NEUTRINO_HEADER_FIELDS = [
@@ -159,8 +158,6 @@ latest_data = {
     'payload': {f: None for f in DATA_PAYLOAD_FIELDS},
     'last_update_time': 0,
     'packets_received': 0,
-    'samples_received': 0,  # Track total samples received
-    'last_bundle_size': 0,  # Track last bundle size
     'status': 'Initializing...',
     'sender_ip': None,
     'fsm_state_name': 'UNKNOWN'
@@ -207,17 +204,13 @@ def udp_listener_thread():
     while True:
         
         try:
-            data, addr = sock.recvfrom(4096)  # Increased for larger bundled packets
+            data, addr = sock.recvfrom(2048)
 
             # Accept 1..N samples per datagram
             try:
                 header, samples = parse_neutrino_packet(data)
             except Exception:
                 continue
-
-            # Debug: Print bundle statistics occasionally
-            if packet_count % 100 == 0:  # Every 100 packets
-                print(f"[UDP] Packet {packet_count}: Bundle of {len(samples)} samples ({len(data)} bytes)")
 
             # Log every sample with per-sample timestamp if available
             with historical_data_lock:
@@ -261,8 +254,6 @@ def udp_listener_thread():
                     'payload': payload,
                     'last_update_time': time.time(),
                     'packets_received': packet_count,
-                    'samples_received': latest_data.get('samples_received', 0) + len(samples),
-                    'last_bundle_size': len(samples),
                     'status': 'Receiving OK',
                     'sender_ip': addr[0],
                     'fsm_state_name': fsm_state_name
@@ -579,8 +570,6 @@ def get_javascript_html():
           updateElementText('last-update',    d.last_update_str);
           updateElementText('sender-ip',      d.sender_ip);
           updateElementText('packet-count',   d.packets_received);
-          updateElementText('sample-count',   d.samples_received);
-          updateElementText('bundle-size',    d.last_bundle_size);
 
           const p = d.payload || {}, h = d.header || {};
           const manual   = p.manual_mode_status === 1;
@@ -893,8 +882,6 @@ def index_page():
             <p>Receiver Status: <strong id="receiver-status">Initializing...</strong></p>
             <p>Last Packet:     <strong id="last-update">N/A</strong></p>
             <p>Packets:         <strong id="packet-count">0</strong></p>
-            <p>Samples:         <strong id="sample-count">0</strong></p>
-            <p>Last Bundle:     <strong id="bundle-size">0</strong> samples</p>
             <p>FSM State:       <strong id="fsm-state-display">N/A</strong></p>
             <p>Armed:           <strong id="armed-status-text" class="off">NOT ARMED</strong></p> 
             <p>EM Coil:         <strong id="em-status-text" class="off">OFF</strong></p> 
