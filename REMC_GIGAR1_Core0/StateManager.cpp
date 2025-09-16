@@ -14,7 +14,7 @@ namespace {
   static bool holdAfterFireModeEMFireFlag = false;  //mswA doesn't open fast enough for Hold mode so this makes sure mswA is open before looking for endstop on close
 
   // Output tracking
-  static bool readyOutputState     = false;  // “Ready” LED
+  static bool readyOutputState     = false;  // "Ready" LED
   static bool emActOutputState     = false;  // EM coil pin state
 
   // Software‐trigger flags (from UDP/web)
@@ -42,7 +42,7 @@ static void setEMState(bool on) {
   digitalWrite(PIN_EM_ACT, on ? HIGH : LOW);
 }
 
-// ─── Private helper to stop actuator and clear “ready” LED ─────────────────
+// ─── Private helper to stop actuator and clear "ready" LED ─────────────────
 static void resetToIdle() {
   ActuatorManager::run(ACT_STOP);
   setEMState(false);
@@ -176,12 +176,13 @@ void update() {
         ActuatorManager::run(ACT_STOP);
         Serial.println(F("StateManager: MSW_A triggered → ARM_PAUSE_BEFORE_PULLBACK"));
         currentState = SystemState::STATE_ARM_PAUSE_BEFORE_PULLBACK;
-        // Pause to give actuator time to come to rest before reversing direction toward MSW_B to “pull back”
+        // Pause to give actuator time to come to rest before reversing direction toward MSW_B to "pull back"
         pauseBeforePullbackStartMs = millis();
       } else if ((millis() - stateStartMs) > ARM_TIMEOUT_MS) {
         // MSW_A never tripped within timeout: set bit 0
+        if (errArmTimeout == false)
+          Serial.println(F("StateManager: ERROR → ARM_TIMEOUT (bit0)"));
         errArmTimeout = true;
-        Serial.println(F("StateManager: ERROR → ARM_TIMEOUT (bit0)"));
         // Still let the actuator continue until it hits MSW_A so we may recover
       }
       break;
@@ -191,7 +192,7 @@ void update() {
       if ((millis() - pauseBeforePullbackStartMs) > PAUSE_BEFORE_PULLBACK_MS) {
         Serial.println(F("StateManager: ARM_PAUSE_BEFORE_PULLBACK → ARM_PULL_BACK"));
         currentState = SystemState::STATE_ARM_PULL_BACK;
-        // Reverse direction toward MSW_B to “pull back”
+        // Reverse direction toward MSW_B to "pull back"
         ActuatorManager::run(ACT_BWD);
         stateStartMs = millis();
       } 
@@ -199,7 +200,7 @@ void update() {
 
     // ───────────────────────────────────────────────────────────────────────────
     case SystemState::STATE_ARM_PULL_BACK:
-      // We are driving backward, waiting for MSW_B to confirm “fully open”
+      // We are driving backward, waiting for MSW_B to confirm "fully open"
       if (mswB_low) {
         Serial.println(F("StateManager: MSW_B triggered → ARMED_READY"));
         currentState = SystemState::STATE_ARMED_READY;
@@ -220,7 +221,7 @@ void update() {
       // The EM is supposed to be holding the switch open (MSW_A_low == true)
       // (math: mswA_low==true means MSW_A is pressed → switch open & sitting on A)
       if (!mswA_low) {
-        // MSW_A is no longer held closed, yet EM is still ON: “retain” failed
+        // MSW_A is no longer held closed, yet EM is still ON: "retain" failed
         errRetainFail = true;
         Serial.println(F("StateManager: ERROR → RETAIN_FAIL (bit2)"));
       }
@@ -228,7 +229,7 @@ void update() {
       // Remain in ARMED_READY until FIRE or IDLE
       if (softwareFireTrigger) {
         softwareFireTrigger = false;
-        // Drop EM, then reset “ready” LED
+        // Drop EM, then reset "ready" LED
         setEMState(false);
         digitalWrite(PIN_READY, LOW);
         readyOutputState = false;

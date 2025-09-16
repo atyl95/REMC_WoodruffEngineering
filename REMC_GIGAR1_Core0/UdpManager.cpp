@@ -1,6 +1,8 @@
 #include "UdpManager.h"
 #include "SharedRing.h"  // For Sample struct definition only
 #include "Config.h"
+#include "StateManager.h"
+#include "PinConfig.h"
 #include <Arduino.h>
 #include <Ethernet.h>
 #include <EthernetUdp.h>
@@ -225,13 +227,13 @@ bool addSample(const Sample& sample) {
   ts.tm1 = convertTemp1DegC(sample.t1);
   ts.us = sample.t_us;
   
-  // TODO: Get these from state manager when available
-  ts.ready = 0;  // StateManager::isReady() ? 1 : 0;
-  ts.em = 0;     // StateManager::isEmActActive() ? 1 : 0;
-  ts.a = 0;      // (digitalRead(PIN_MSW_POS_A) == LOW) ? 0 : 1;
-  ts.b = 0;      // (digitalRead(PIN_MSW_POS_B) == LOW) ? 0 : 1;
-  ts.manual = 0; // StateManager::isManualModeActive() ? 1 : 0;
-  ts.hold = 0;   // StateManager::isHoldAfterFireModeActive() ? 1 : 0;
+  // Get these from state manager 
+  ts.ready = StateManager::isReady() ? 1 : 0;
+  ts.em = StateManager::isEmActActive() ? 1 : 0;
+  ts.a = (digitalRead(PIN_MSW_POS_A) == LOW) ? 0 : 1;
+  ts.b = (digitalRead(PIN_MSW_POS_B) == LOW) ? 0 : 1;
+  ts.manual = StateManager::isManualModeActive() ? 1 : 0;
+  ts.hold = StateManager::isHoldAfterFireModeActive() ? 1 : 0;
   
   s_bundle_count++;
   return true;
@@ -259,8 +261,15 @@ size_t addSamplesBulk(const Sample* samples, size_t count) {
       ts.tm1 = sample.t1 * SCALE_TEMP_DEGC + OFFSET_TEMP_DEGC;
       ts.us = sample.t_us;
       
-      // TODO: Get these from state manager when available
-      ts.ready = 0;  ts.em = 0;  ts.a = 0;  ts.b = 0;  ts.manual = 0;  ts.hold = 0;
+      // Get these from state manager - optimized for bulk processing
+      uint8_t ready = StateManager::isReady() ? 1 : 0;
+      uint8_t em = StateManager::isEmActActive() ? 1 : 0;
+      uint8_t a = (digitalRead(PIN_MSW_POS_A) == LOW) ? 0 : 1;
+      uint8_t b = (digitalRead(PIN_MSW_POS_B) == LOW) ? 0 : 1;
+      uint8_t manual = StateManager::isManualModeActive() ? 1 : 0;
+      uint8_t hold = StateManager::isHoldAfterFireModeActive() ? 1 : 0;
+      
+      ts.ready = ready;  ts.em = em;  ts.a = a;  ts.b = b;  ts.manual = manual;  ts.hold = hold;
     }
     
     s_bundle_count += to_process;
@@ -311,21 +320,23 @@ void processIncoming() {
     uint8_t buf[BUF_SIZE];
     int len = cmdUdp.read(buf, min(size, BUF_SIZE));
     if (len > 64) {
+      Serial.print(F("UdpManager: Received command: "));
+      Serial.println(buf[64], HEX);
       uint8_t cmd = buf[64];
       switch (cmd) {
-        // TODO: Re-integrate state management commands when StateManager is available
-        // case 0x01: StateManager::requestArm(); break;
-        // case 0x02: StateManager::triggerSoftwareActuate(); break;
-        // case 0x03: StateManager::requestDisarm(); break;
-        // case 0x11: StateManager::manualActuatorControl(ACT_FWD); break;
-        // case 0x12: StateManager::manualActuatorControl(ACT_STOP); break;
-        // case 0x13: StateManager::manualActuatorControl(ACT_BWD); break;
-        // case 0x15: StateManager::manualEMEnable(); break;
-        // case 0x16: StateManager::manualEMDisable(); break;
-        // case 0x1F: StateManager::enableManualMode(); break;
-        // case 0x1E: StateManager::disableManualMode(); break;
-        // case 0x20: StateManager::enableHoldAfterFireMode(); break;
-        // case 0x21: StateManager::disableHoldAfterFireMode(); break;
+        // State management commands 
+        case 0x01: StateManager::requestArm(); break;
+        case 0x02: StateManager::triggerSoftwareActuate(); break;
+        case 0x03: StateManager::requestDisarm(); break;
+        case 0x11: StateManager::manualActuatorControl(ACT_FWD); break;
+        case 0x12: StateManager::manualActuatorControl(ACT_STOP); break;
+        case 0x13: StateManager::manualActuatorControl(ACT_BWD); break;
+        case 0x15: StateManager::manualEMEnable(); break;
+        case 0x16: StateManager::manualEMDisable(); break;
+        case 0x1F: StateManager::enableManualMode(); break;
+        case 0x1E: StateManager::disableManualMode(); break;
+        case 0x20: StateManager::enableHoldAfterFireMode(); break;
+        case 0x21: StateManager::disableHoldAfterFireMode(); break;
         default: break;
       }
     }
