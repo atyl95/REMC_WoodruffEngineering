@@ -65,7 +65,3 @@ Configure your PC's Ethernet adapter:
 └── *.csv                       # Telemetry log files
 ```
 
-## Safety Notice
-
-⚠️ **HIGH VOLTAGE SYSTEM** - This system controls high-voltage electrical equipment. Only qualified personnel should operate this system. Always follow proper safety protocols.
-
