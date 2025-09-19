@@ -19,6 +19,13 @@ static const uint16_t  TELEMETRY_PORT = 13013;
 static const IPAddress COMMAND_MCAST_IP (239, 9, 9, 32);
 static const uint16_t  COMMAND_PORT = 13012;
 
+static const IPAddress NTP_IP (239, 9, 9, 34);
+static const uint16_t  NTP_PORT = 13014;
+
+// ----- NTP Client configuration -----
+static const char* NTP_SERVER = "192.168.1.10";  // NTP server IP/hostname
+static const uint16_t NTP_CLIENT_PORT = 123;     // NTP server port
+
 // ----- Timing configuration -----
 static const unsigned int  ANALOG_SAMPLE_FREQUENCY_HZ  = 10000; // ADC sample & PWM update rate
 static const unsigned int  ANALOG_OUTPUT_FREQUENCY_HZ  = 10000; // PWM frequency

@@ -25,6 +25,10 @@ namespace UdpManager {
   size_t getBufferUsage();
   size_t getBufferCapacity();
   
+  // UDP object access
+  EthernetUDP* getUdpObject();
+  EthernetUDP* getNTPUdpObject();
+  
   // Legacy functions (deprecated/unused)
   bool isPacketReady();
   void sendPacketIfReady(); 

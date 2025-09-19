@@ -13,11 +13,15 @@
 // --- Network Configuration ---
 static EthernetUDP cmdUdp;  // Multicast listener for commands
 static EthernetUDP udp;
+static EthernetUDP ntpUdp; // for NTP sync
+
 static const IPAddress PC_MCAST = Config::TELEMETRY_IP;  // Destination IP for telemetry
 static const uint16_t UDP_PORT = Config::TELEMETRY_PORT;
 
 static const IPAddress CMD_MCAST = Config::COMMAND_MCAST_IP;
 static const uint16_t CMD_PORT = Config::COMMAND_PORT;
+
+static const uint16_t NTP_PORT = Config::NTP_PORT;
 
 // Neutrino header constants
 static const uint32_t MSG_ID = 1;  // Atomic
@@ -181,6 +185,12 @@ void init() {
     Serial.println(CMD_PORT);
   }
 
+  Serial.print(F("UdpManager: Binding NTP on port "));
+  Serial.println(NTP_PORT);
+  if (ntpUdp.begin(NTP_PORT) != 1) {
+    Serial.println(F("UdpManager: NTP bind failed"));
+  }
+
   calcSchemaHash();
 
   // Initialize time (replace with actual time sync)
@@ -299,6 +309,12 @@ size_t getBufferCapacity() {
   return MAX_SAMPLES_PER_BUNDLE;
 }
 
+EthernetUDP* getUdpObject() {
+  return &udp;
+}
+EthernetUDP* getNTPUdpObject() {
+  return &ntpUdp;
+}
 // Legacy functions
 bool isPacketReady() {
   return s_bundle_count > 0;
