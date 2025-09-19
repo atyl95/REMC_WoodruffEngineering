@@ -7,6 +7,9 @@
 #include "ActuatorManager.h"
 #include "SDRAM.h"
 #include "HardwareTimer.h"
+#include "NTPClient.h"
+#include "Config.h"
+
 
 void setup() { 
   Serial.begin(115200);
@@ -36,13 +39,26 @@ void setup() {
   Serial.println(F("[Serial Core] UdpManager init"));
   UdpManager::init();
 
-    // Initialize the shared timer (only call from M7)
-    if (HardwareTimer::begin()) {
-        Serial.println("Hardware timer initialized successfully");
-    } else {
-        Serial.println("Failed to initialize hardware timer");
-    }
+  Serial.println("[Serial Core] NTP beginning.");
+  // Initialize the singleton with a shared UDP object
+  NTPClient::initialize(UdpManager::getNTPUdpObject());
+  Serial.println("[Serial Core] NTP initialized.");
+  NTPClient::begin(Config::NTP_SERVER, Config::NTP_CLIENT_PORT);
+  Serial.println("[Serial Core] NTP begun.");
+  if(NTPClient::sync()) {
+    Serial.println("[Serial Core] NTP synced.");
+  }
+  else Serial.println("[Serial Core] NTP FAILED TO SYNC.");
 
+
+  // Initialize the shared timer (only call from M7)
+  if (HardwareTimer::begin()) {
+      Serial.println("[Serial Core] Hardware timer initialized successfully");
+  } else {
+      Serial.println("[Serial Core] Failed to initialize hardware timer");
+  }
+
+  
   // Starts Sampling Core (1)
   RPC.begin();
   Serial.println(F("[Serial Core] Ready - call startGathering() to begin"));
@@ -71,7 +87,7 @@ void loop() {
 //     Serial.println("[Serial Core] Timer micros: " + String(current_time));
 //     last_print = current_time;
 //   }
-// }
+}
 
 // ===== DEBUG FUNCTIONS FROM M4 CORE =====
 void DEBUG_printRPCMessages() {
