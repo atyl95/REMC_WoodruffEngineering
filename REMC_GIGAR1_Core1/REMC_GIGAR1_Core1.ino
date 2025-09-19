@@ -5,6 +5,7 @@
 #include "SharedRing.h"
 #include "Logger.h"
 #include "PinConfig.h"
+#include "HardwareTimer.h"
 
 using namespace std::chrono_literals;  // enables 100us, 10ms, etc.
 
@@ -14,8 +15,6 @@ static mbed::AnalogIn ain_switchVoltage((PinName)digitalPinToPinName(PIN_SWITCH_
 static mbed::AnalogIn ain_outA((PinName)digitalPinToPinName(PIN_OUTPUT_VOLTAGE_A));
 static mbed::AnalogIn ain_outB((PinName)digitalPinToPinName(PIN_OUTPUT_VOLTAGE_B));
 static mbed::AnalogIn ain_temp1((PinName)digitalPinToPinName(PIN_TEMP_1));
-
-mbed::Ticker sampleTicker;
 
 volatile uint16_t g_switchCurrentRaw = 0;
 volatile uint16_t g_switchVoltageRaw = 0;
@@ -28,7 +27,7 @@ uint16_t tempSampleCounter = TEMP_DIVIDER_THRESHOLD;
 
 void push_sample() {
   // Capture timestamp FIRST for maximum accuracy
-  uint32_t sample_time = micros();
+  uint32_t sample_time = HardwareTimer::getMicros();
   
   // Read all ADC inputs in sequence (minimize timing variation)
   uint16_t swI_raw = ain_switchCurrent.read_u16() >> 4;
@@ -40,7 +39,7 @@ void push_sample() {
   uint16_t temp_raw = g_temp1Raw; // Use previous value by default
   tempSampleCounter++;
   if (tempSampleCounter >= TEMP_DIVIDER_THRESHOLD) {
-    temp_raw = ain_temp1.read_u16() >> 4;
+    g_temp1Raw = temp_raw = ain_temp1.read_u16() >> 4;
     tempSampleCounter = 0;
   }
   
@@ -82,8 +81,12 @@ void setup() {
   Logger::log(addrStr);
   SharedRing_Init();
 
-  // START ISR LOOP
-  //sampleTicker.attach(mbed::callback(push_sample), 100us);
+  // M4 doesn't need to call begin() - just use the timer
+  while (!HardwareTimer::isInitialized()) {
+    // Wait for M7 to initialize the timer
+    delay(1);
+  }
+  Logger::log("[Sampling Core] Hardware timer initialized successfully");
 }
 
 
@@ -92,6 +95,19 @@ constexpr uint32_t SAMPLE_INTERVAL_US = 100;
 // Pre-calculated timing for better precision
 static uint32_t next_sample_time = 0;
 static bool first_sample = true;
+
+// void loop() {
+//   uint32_t current_time = HardwareTimer::getMicros();
+
+//   static uint32_t last_print = 0;
+
+//   // Print every 1 second (1,000,000 microseconds)
+//   if (current_time - last_print >= 1000000) {
+//     Logger::log("[Sampling Core] About to print hardware micros");
+//     Logger::log("[Sampling Core] Timer micros: " + String(current_time));
+//     last_print = current_time;
+//   }
+// }
 
 void loop() {
   // Wait for precise timing at the start of loop (eliminates loop overhead)

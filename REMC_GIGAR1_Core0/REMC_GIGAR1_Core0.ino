@@ -6,18 +6,18 @@
 #include "StateManager.h"
 #include "ActuatorManager.h"
 #include "SDRAM.h"
+#include "HardwareTimer.h"
 
 void setup() { 
   Serial.begin(115200);
   while (!Serial) { }    // wait (native-USB boards)
   Serial.println(F("\nREMC Switch Control Initializing (Dual Core)..."));
 
-  // 1) Initialize SDRAM hardware
+  // Initialize SDRAM hardware - important for storing 8MB worth of accumulated samples
   if (!SDRAM.begin()) {
     Serial.println("[Serial Core] ERROR: SDRAM init failed!");
     while (1);
   }
-
   // Initialize Sample Collector (includes SharedRing setup)
   if (!SampleCollector::init()) {
     Serial.println("[Serial Core] ERROR: SampleCollector init failed!");
@@ -35,6 +35,13 @@ void setup() {
   // Initialize UDP Manager
   Serial.println(F("[Serial Core] UdpManager init"));
   UdpManager::init();
+
+    // Initialize the shared timer (only call from M7)
+    if (HardwareTimer::begin()) {
+        Serial.println("Hardware timer initialized successfully");
+    } else {
+        Serial.println("Failed to initialize hardware timer");
+    }
 
   // Starts Sampling Core (1)
   RPC.begin();
