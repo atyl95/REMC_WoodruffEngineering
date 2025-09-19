@@ -62,7 +62,16 @@ void loop() {
   
   // Handle incoming UDP commands
   UdpManager::update();
-}
+
+  static uint32_t last_print = 0;
+  uint32_t current_time = HardwareTimer::getMicros64();
+
+//   // Print every 1 second (1,000,000 microseconds)
+//   if (current_time - last_print >= 1000000) {
+//     Serial.println("[Serial Core] Timer micros: " + String(current_time));
+//     last_print = current_time;
+//   }
+// }
 
 // ===== DEBUG FUNCTIONS FROM M4 CORE =====
 void DEBUG_printRPCMessages() {

@@ -97,7 +97,7 @@ static uint32_t next_sample_time = 0;
 static bool first_sample = true;
 
 // void loop() {
-//   uint32_t current_time = HardwareTimer::getMicros();
+//   uint32_t current_time = HardwareTimer::getMicros64();
 
 //   static uint32_t last_print = 0;
 
