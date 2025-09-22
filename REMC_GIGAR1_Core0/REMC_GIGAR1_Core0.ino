@@ -8,6 +8,7 @@
 #include "SDRAM.h"
 #include "HardwareTimer.h"
 #include "NTPClient.h"
+#include "TimeMapper.h"
 #include "Config.h"
 
 void setup() { 
@@ -38,6 +39,13 @@ void setup() {
   Serial.println(F("[Serial Core] UdpManager init"));
   UdpManager::init();
 
+  // Initialize the shared timer (only call from M7)
+  if (HardwareTimer::begin()) {
+      Serial.println("[Serial Core] Hardware timer initialized successfully");
+  } else {
+      Serial.println("[Serial Core] Failed to initialize hardware timer");
+  }
+
   Serial.println("[Serial Core] NTP beginning.");
   // Initialize the singleton with a shared UDP object
   NTPClient::initialize(UdpManager::getNTPUdpObject());
@@ -49,12 +57,12 @@ void setup() {
   }
   else Serial.println("[Serial Core] NTP FAILED TO SYNC.");
 
-
-  // Initialize the shared timer (only call from M7)
-  if (HardwareTimer::begin()) {
-      Serial.println("[Serial Core] Hardware timer initialized successfully");
+  // Initialize TimeMapper after both HardwareTimer and NTP are ready
+  Serial.println("[Serial Core] TimeMapper beginning.");
+  if (TimeMapper::getInstance().begin()) {
+    Serial.println("[Serial Core] TimeMapper initialized successfully");
   } else {
-      Serial.println("[Serial Core] Failed to initialize hardware timer");
+    Serial.println("[Serial Core] TimeMapper initialization failed");
   }
   
   // Starts Sampling Core (1)
@@ -64,7 +72,6 @@ void setup() {
 }
 
 void loop() {
-
   // Print RPC messages from M4 Core
   DEBUG_printRPCMessages();
   
@@ -77,19 +84,8 @@ void loop() {
   // Handle incoming UDP commands
   UdpManager::update();
 
-  static uint64_t last_print = 0;
-  uint64_t current_time = HardwareTimer::getMicros64();
-
-  // Print every 1 second (1,000,000 microseconds)
-  if (current_time - last_print >= 1000000) {
-      char buf[32];
-      snprintf(buf, sizeof(buf), "%" PRIu64, current_time);
-      Serial.print("[Serial Core] Timer micros: ");
-      Serial.println(buf);
-    Serial.println("[Serial Core] Rollover count: " + String(HardwareTimer::getRolloverCount()));
-
-    last_print = current_time;
-  }
+  // Update TimeMapper (handles automatic NTP re-sync every 10 seconds)
+  TimeMapper::update();
 }
 
 // ===== DEBUG FUNCTIONS FROM M4 CORE =====

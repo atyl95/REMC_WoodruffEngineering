@@ -128,10 +128,10 @@ bool NTPClient::sendRequest() {
     return false;
   }
 
-  Serial.print("[NTP] Sending NTP request to ");
-  Serial.print(_serverIP);
-  Serial.print(":");
-  Serial.println(_serverPort);
+  //Serial.print("[NTP] Sending NTP request to ");
+  //Serial.print(_serverIP);
+  //Serial.print(":");
+  //Serial.println(_serverPort);
 
   uint8_t packet[NTP_PACKET_SIZE];
   memset(packet, 0, sizeof(packet));
@@ -160,7 +160,7 @@ bool NTPClient::sendRequest() {
     return false;
   }
   
-  Serial.println("[NTP] NTP request sent successfully");
+  //Serial.println("[NTP] NTP request sent successfully");
   return true;
 }
 
@@ -177,9 +177,9 @@ bool NTPClient::readResponse(uint32_t& secs, uint32_t& frac) {
     return false;
   }
 
-  Serial.print("[NTP] Received NTP response (");
-  Serial.print(size);
-  Serial.println(" bytes)");
+  //Serial.print("[NTP] Received NTP response (");
+  //Serial.print(size);
+  //Serial.println(" bytes)");
 
   uint8_t buf[NTP_PACKET_SIZE];
   int bytesRead = _udp->read(buf, NTP_PACKET_SIZE);
@@ -211,10 +211,10 @@ bool NTPClient::readResponse(uint32_t& secs, uint32_t& frac) {
          ((uint32_t)buf[46] << 8)  |
          ((uint32_t)buf[47]);
 
-  Serial.print("[NTP] Transmit timestamp: ");
-  Serial.print(secs);
-  Serial.print(".");
-  Serial.println(frac);
+  //Serial.print("[NTP] Transmit timestamp: ");
+  //Serial.print(secs);
+  //Serial.print(".");
+  //Serial.println(frac);
 
   // Basic sanity: NTP time should be after Jan 1, 2000 (946684800 Unix)
   uint32_t unixSecs = secs - NTP_UNIX_EPOCH_DIFF;
@@ -234,9 +234,9 @@ bool NTPClient::syncInstance(uint16_t timeout_ms) {
     return false;
   }
 
-  Serial.print("[NTP] Starting sync with timeout: ");
-  Serial.print(timeout_ms);
-  Serial.println("ms");
+  //Serial.print("[NTP] Starting sync with timeout: ");
+  //Serial.print(timeout_ms);
+  //Serial.println("ms");
 
   // Flush any stale packets
   int flushed = 0;
@@ -246,9 +246,9 @@ bool NTPClient::syncInstance(uint16_t timeout_ms) {
     flushed++;
   }
   if (flushed > 0) {
-    Serial.print("[NTP] Flushed ");
-    Serial.print(flushed);
-    Serial.println(" stale packets");
+    //Serial.print("[NTP] Flushed ");
+    //Serial.print(flushed);
+    //Serial.println(" stale packets");
   }
 
   if (!sendRequest()) {
@@ -256,7 +256,7 @@ bool NTPClient::syncInstance(uint16_t timeout_ms) {
     return false;
   }
 
-  Serial.println("[NTP] Waiting for response...");
+  //Serial.println("[NTP] Waiting for response...");
   uint32_t start = millis();
   uint32_t lastCheck = start;
   
@@ -274,23 +274,23 @@ bool NTPClient::syncInstance(uint16_t timeout_ms) {
       _microsAtSync = localMicros;
       _synced = true;
       
-      Serial.println("[NTP] Sync successful!");
-      Serial.print("[NTP] NTP timestamp: ");
-      Serial.print(secs);
-      Serial.print(".");
-      Serial.println(frac);
+      Serial.println("[NTP] Sync successful");
+      //Serial.print("[NTP] NTP timestamp: ");
+      //Serial.print(secs);
+      //Serial.print(".");
+      //Serial.println(frac);
 
-      Serial.print("[NTP] Unix time (s): ");
-      Serial.println((unsigned long)(unixUs / 1000000ULL));
+      //Serial.print("[NTP] Unix time (s): ");
+      //Serial.println((unsigned long)(unixUs / 1000000ULL));
       
-      Serial.print("[NTP] Unix time (us): ");
-      Serial.print((unsigned long)(unixUs / 1000000ULL));
-      Serial.print("_");
-      Serial.println((unsigned long)(unixUs % 1000000ULL));
+      //Serial.print("[NTP] Unix time (us): ");
+      //Serial.print((unsigned long)(unixUs / 1000000ULL));
+      //Serial.print("_");
+      //Serial.println((unsigned long)(unixUs % 1000000ULL));
 
-      char buf[32];
-      sprintf(buf, "%llu", (unsigned long long)unixUs);
-      Serial.println(buf);
+      //char buf[32];
+      //sprintf(buf, "%llu", (unsigned long long)unixUs);
+      //Serial.println(buf);
 
       return true;
     }
