@@ -8,7 +8,7 @@
 #include <EthernetUdp.h>
 #include "MD5.h"      // For schema hashing
 #include <TimeLib.h>  // For timekeeping (needs external time source)
-
+#include "TimeMapper.h"
 
 // --- Network Configuration ---
 static EthernetUDP cmdUdp;  // Multicast listener for commands
@@ -49,17 +49,17 @@ static const char* schema =
 
 // Dynamic bundling configuration - optimized for MTU
 // Ethernet MTU=1500, IP=20, UDP=8 → max payload=1472
-// Header=64, remaining=1408, sample=30 → max samples=46 (safe)
-constexpr size_t MAX_SAMPLES_PER_BUNDLE = 46;  // Maximum samples per UDP packet (MTU optimized)
+// Header=64, remaining=1408, sample=34 → max samples=41 (safe)
+constexpr size_t MAX_SAMPLES_PER_BUNDLE = 41;  // Maximum samples per UDP packet (MTU optimized)
 
 // Data sizes - variable samples per packet  
-static const size_t DATA_SIZE_PER_SAMPLE = (5 * sizeof(float)) + sizeof(uint32_t) + 6 * sizeof(uint8_t);  // 30 bytes per sample
+static const size_t DATA_SIZE_PER_SAMPLE = (5 * sizeof(float)) + sizeof(uint64_t) + 6 * sizeof(uint8_t);  // 34 bytes per sample
 static const size_t MAX_PACKET_SIZE = HEADER_SIZE + (DATA_SIZE_PER_SAMPLE * MAX_SAMPLES_PER_BUNDLE);
-// Packet size check: 64 + (30 * 46) = 1444 bytes < 1472 MTU limit ✓
+// Packet size check: 64 + (34 * 41) = 1458 bytes < 1472 MTU limit ✓
 
 struct TelemetrySample {
   float sv, sc, ova, ovb, tm1;
-  uint32_t us;  // micros() at capture time
+  uint64_t us;  // NTP timestamp in microseconds (from TimeMapper)
   uint8_t ready, em, a, b, manual, hold;
 };
 
@@ -235,7 +235,7 @@ bool addSample(const Sample& sample) {
   ts.ova = convertOutputVoltageAKV(sample.outA);
   ts.ovb = convertOutputVoltageBKV(sample.outB);
   ts.tm1 = convertTemp1DegC(sample.t1);
-  ts.us = sample.t_us;
+  ts.us = TimeMapper::sampleToNTP(sample.t_us, sample.rollover_count);
   
   // Get these from state manager 
   ts.ready = StateManager::isReady() ? 1 : 0;
@@ -410,7 +410,7 @@ void sendNeutrinoPacket() {
     memcpy(d, &sample.sv, 20);
     d += 20;
     
-    // Copy uint32_t timestamp
+    // Copy uint64_t NTP timestamp
     memcpy(d, &sample.us, sizeof(sample.us));
     d += sizeof(sample.us);
 

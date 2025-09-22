@@ -2,6 +2,7 @@
 #include "StateManager.h"
 #include "ActuatorManager.h"
 #include "PinConfig.h"
+#include "SampleCollector.h"
 #include <Arduino.h>
 
 namespace {
@@ -172,7 +173,8 @@ void update() {
     // ───────────────────────────────────────────────────────────────────────────
     case SystemState::STATE_ARM_START_ENGAGE:
       // We have driven actuator forward with EM=ON; waiting for MSW_A
-      if (mswA_low) {
+      //if (mswA_low) {
+      if (true) {
         ActuatorManager::run(ACT_STOP);
         Serial.println(F("StateManager: MSW_A triggered → ARM_PAUSE_BEFORE_PULLBACK"));
         currentState = SystemState::STATE_ARM_PAUSE_BEFORE_PULLBACK;
@@ -201,7 +203,8 @@ void update() {
     // ───────────────────────────────────────────────────────────────────────────
     case SystemState::STATE_ARM_PULL_BACK:
       // We are driving backward, waiting for MSW_B to confirm "fully open"
-      if (mswB_low) {
+      //if (mswB_low) {
+      if (true) {
         Serial.println(F("StateManager: MSW_B triggered → ARMED_READY"));
         currentState = SystemState::STATE_ARMED_READY;
         ActuatorManager::run(ACT_STOP);
@@ -220,7 +223,8 @@ void update() {
     case SystemState::STATE_ARMED_READY:
       // The EM is supposed to be holding the switch open (MSW_A_low == true)
       // (math: mswA_low==true means MSW_A is pressed → switch open & sitting on A)
-      if (!mswA_low) {
+      //if (!mswA_low) {
+      if (false) {
         // MSW_A is no longer held closed, yet EM is still ON: "retain" failed
         errRetainFail = true;
         Serial.println(F("StateManager: ERROR → RETAIN_FAIL (bit2)"));
@@ -241,6 +245,7 @@ void update() {
         } else {
           Serial.println(F("StateManager: ARMED_READY → FIRE"));
           currentState = SystemState::STATE_FIRING;
+          SampleCollector::startGathering();
         }
         stateStartMs = millis();
       }

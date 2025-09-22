@@ -41,7 +41,8 @@ MAX_RECORDS_IN_RAM = (1 * 1024 * 1024 * 1024) // BYTES_PER_RECORD_EST
 # Neutrino framing
 HEADER_SIZE = 64
 # Legacy: 5 floats (20 bytes) + 6 bytes = 26 bytes payload  
-# Current: 5 floats (20 bytes) + uint32 (4 bytes) + 6 bytes = 30 bytes payload
+# Old: 5 floats (20 bytes) + uint32 (4 bytes) + 6 bytes = 30 bytes payload
+# Current: 5 floats (20 bytes) + uint64 (8 bytes) + 6 bytes = 34 bytes payload
 DATA_PAYLOAD_SIZE = (5 * 4) + (6 * 1)  # Legacy 26-byte format
 EXPECTED_PAYLOAD_SIZE = HEADER_SIZE + DATA_PAYLOAD_SIZE  # For legacy compatibility
 
@@ -71,10 +72,11 @@ def parse_neutrino_packet(datagram: bytes):
 
     - Header fields are big-endian/network order (as sent by the Due).
     - Payload floats are little-endian (memcpy from Due floats).
-    - Accepts both:
+    - Accepts multiple formats:
         * legacy 26-byte samples: 5 floats + 6 flags
-        * new    30-byte samples: 5 floats + uint32 micros + 6 flags
-    Each sample dict will include 'sample_micros' and 'sample_timestamp_us' if available.
+        * old    30-byte samples: 5 floats + uint32 micros + 6 flags  
+        * current 34-byte samples: 5 floats + uint64 ntp_timestamp_us + 6 flags
+    Each sample dict will include timestamp fields if available.
     """
     if len(datagram) < HEADER_SIZE:
         raise ValueError('packet too short')
@@ -90,17 +92,22 @@ def parse_neutrino_packet(datagram: bytes):
     if isinstance(header.get('schema_hash'), bytes):
         header['schema_hash'] = header['schema_hash'].hex()
 
-    # Decide sample size: try 30 first (with per-sample micros), then 26
-    SAMPLE_SIZE_NEW = (5 * 4) + 4 + 6  # 30 bytes
-    SAMPLE_SIZE_OLD = DATA_PAYLOAD_SIZE  # 26 bytes
-    if len(payload) % SAMPLE_SIZE_NEW == 0:
-        sample_size = SAMPLE_SIZE_NEW
-        has_micros = True
+    # Decide sample size: try 34 (64-bit NTP), then 30 (32-bit micros), then 26 (legacy)
+    SAMPLE_SIZE_CURRENT = (5 * 4) + 8 + 6  # 34 bytes (5 floats + uint64 + 6 flags)
+    SAMPLE_SIZE_OLD = (5 * 4) + 4 + 6      # 30 bytes (5 floats + uint32 + 6 flags)
+    SAMPLE_SIZE_LEGACY = DATA_PAYLOAD_SIZE  # 26 bytes (5 floats + 6 flags)
+    
+    if len(payload) % SAMPLE_SIZE_CURRENT == 0:
+        sample_size = SAMPLE_SIZE_CURRENT
+        timestamp_format = 'ntp64'  # 64-bit NTP timestamp
     elif len(payload) % SAMPLE_SIZE_OLD == 0:
         sample_size = SAMPLE_SIZE_OLD
-        has_micros = False
+        timestamp_format = 'micros32'  # 32-bit micros
+    elif len(payload) % SAMPLE_SIZE_LEGACY == 0:
+        sample_size = SAMPLE_SIZE_LEGACY
+        timestamp_format = 'none'  # No timestamp
     else:
-        raise ValueError(f'payload length {len(payload)} not multiple of 30 or 26')
+        raise ValueError(f'payload length {len(payload)} not multiple of 34, 30, or 26')
 
     n = len(payload) // sample_size
     samples = []
@@ -116,24 +123,33 @@ def parse_neutrino_packet(datagram: bytes):
         sv, sc, ova, ovb, t1 = struct.unpack_from('<fffff', payload, offset)
         offset += 20
 
+        # Parse timestamp based on format
         sample_micros = None
-        if has_micros:
+        sample_timestamp_us = None
+        
+        if timestamp_format == 'ntp64':
+            # 64-bit NTP timestamp in microseconds (little-endian)
+            (ntp_timestamp_us,) = struct.unpack_from('<Q', payload, offset)
+            offset += 8
+            sample_timestamp_us = ntp_timestamp_us
+            # For backward compatibility, extract just the microsecond portion
+            sample_micros = int(ntp_timestamp_us % 1_000_000)
+            
+        elif timestamp_format == 'micros32':
+            # 32-bit microseconds (legacy format)
             (sample_micros,) = struct.unpack_from('<I', payload, offset)
             offset += 4
-
-        # 6 single-byte flags
-        ready, em, a, b, manual, hold = struct.unpack_from('<6B', payload, offset)
-        offset += 6
-
-        # Compute absolute per-sample timestamp if we have micros
-        sample_timestamp_us = None
-        if sample_micros is not None:
+            # Compute absolute timestamp using header time base
             sec = base_sec
             # Guard: if header is at very early µs in the next second but sample micros are very high,
             # assume sample was just before the header second (roll back one second).
             if hdr_us < 10_000 and sample_micros > 990_000:
                 sec = max(0, sec - 1)
             sample_timestamp_us = sec * 1_000_000 + int(sample_micros)
+
+        # 6 single-byte flags
+        ready, em, a, b, manual, hold = struct.unpack_from('<6B', payload, offset)
+        offset += 6
 
         samples.append({
             'switch_voltage_kv': sv,
@@ -217,7 +233,16 @@ def udp_listener_thread():
 
             # Debug: Print bundle statistics occasionally
             if packet_count % 100 == 0:  # Every 100 packets
-                print(f"[UDP] Packet {packet_count}: Bundle of {len(samples)} samples ({len(data)} bytes)")
+                sample_size_str = ""
+                if samples:
+                    if 'sample_timestamp_us' in samples[0] and samples[0]['sample_timestamp_us'] is not None:
+                        if samples[0]['sample_timestamp_us'] > 1e12:  # Likely NTP timestamp
+                            sample_size_str = " (64-bit NTP timestamps)"
+                        else:
+                            sample_size_str = " (32-bit timestamps)"
+                    else:
+                        sample_size_str = " (no timestamps)"
+                print(f"[UDP] Packet {packet_count}: Bundle of {len(samples)} samples ({len(data)} bytes){sample_size_str}")
 
             # Log every sample with per-sample timestamp if available
             with historical_data_lock:

@@ -25,9 +25,9 @@ volatile uint16_t g_temp1Raw = 0;
 const uint16_t TEMP_DIVIDER_THRESHOLD = 10000;
 uint16_t tempSampleCounter = TEMP_DIVIDER_THRESHOLD;
 
-void push_sample() {
+void push_sample(uint32_t atMicros) {
   // Capture timestamp FIRST for maximum accuracy
-  uint32_t sample_time = HardwareTimer::getMicros();
+  uint32_t sample_time = atMicros;
   uint32_t rollover_count = HardwareTimer::getRolloverCount();
   
   // Read all ADC inputs in sequence (minimize timing variation)
@@ -100,16 +100,16 @@ static bool first_sample = true;
 
 
 void loop() {
-  uint32_t current_time = HardwareTimer::getMicros();
 
   // Wait for precise timing at the start of loop (eliminates loop overhead)
-  while ((int32_t)(micros() - next_sample_time) < 0) {
+  while ((int32_t)(HardwareTimer::getMicros() - next_sample_time) < 0) {
     // Busy wait for precise timing
     __asm volatile("nop");
   }
   
   
   // Initialize timing on first sample
+  uint32_t current_time = HardwareTimer::getMicros();
   if (first_sample) {
     next_sample_time = current_time + SAMPLE_INTERVAL_US;
     first_sample = false;
@@ -117,7 +117,7 @@ void loop() {
   }
   
   // Sample immediately when timing is met (no additional time checks)
-  push_sample();
+  push_sample(current_time);
   
   // Schedule next sample time (accumulative to prevent drift)
   next_sample_time += SAMPLE_INTERVAL_US;
