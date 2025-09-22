@@ -96,19 +96,6 @@ constexpr uint32_t SAMPLE_INTERVAL_US = 100;
 static uint32_t next_sample_time = 0;
 static bool first_sample = true;
 
-// void loop() {
-//   uint32_t current_time = HardwareTimer::getMicros64();
-
-//   static uint32_t last_print = 0;
-
-//   // Print every 1 second (1,000,000 microseconds)
-//   if (current_time - last_print >= 1000000) {
-//     Logger::log("[Sampling Core] About to print hardware micros");
-//     Logger::log("[Sampling Core] Timer micros: " + String(current_time));
-//     last_print = current_time;
-//   }
-// }
-
 void loop() {
   // Wait for precise timing at the start of loop (eliminates loop overhead)
   while ((int32_t)(micros() - next_sample_time) < 0) {

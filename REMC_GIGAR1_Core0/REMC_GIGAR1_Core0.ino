@@ -87,7 +87,7 @@ void loop() {
       snprintf(buf, sizeof(buf), "%" PRIu64, current_time);
       Serial.print("[Serial Core] Timer micros: ");
       Serial.println(buf);
-    Serial.println("[Serial Core] TIM5 rollover: " + String(TIM5->CNT));
+    Serial.println("[Serial Core] Rollover count: " + String(HardwareTimer::getRolloverCount()));
 
     if (slammed_once == 0)
     {

@@ -48,10 +48,11 @@ public:
     static uint32_t getMillis();
     static uint64_t getMicros64();
     static uint64_t getMillis64();
+    static uint32_t getRolloverCount();
     static void checkRollover();
     static void reset();
 private:
     static uint32_t lastTIM2Value;
-    static uint32_t lastTIM5Value;
+    static uint32_t rolloverCount;
 };
 #endif // HARDWARE_TIMER_H
