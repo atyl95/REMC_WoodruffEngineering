@@ -80,7 +80,6 @@ void loop() {
   static uint64_t last_print = 0;
   uint64_t current_time = HardwareTimer::getMicros64();
 
-  static int slammed_once = 0;
   // Print every 1 second (1,000,000 microseconds)
   if (current_time - last_print >= 1000000) {
       char buf[32];
@@ -88,14 +87,6 @@ void loop() {
       Serial.print("[Serial Core] Timer micros: ");
       Serial.println(buf);
     Serial.println("[Serial Core] Rollover count: " + String(HardwareTimer::getRolloverCount()));
-
-    if (slammed_once == 0)
-    {
-      TIM_HandleTypeDef t2;
-      t2.Instance = TIM2;
-      __HAL_TIM_SET_COUNTER(&t2, 4290967295);
-      slammed_once = 1;
-    }
 
     last_print = current_time;
   }
