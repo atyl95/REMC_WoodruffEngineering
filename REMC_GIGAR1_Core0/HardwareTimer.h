@@ -48,11 +48,10 @@ public:
     static uint32_t getMillis();
     static uint64_t getMicros64();
     static uint64_t getMillis64();
+    static void checkRollover();
     static void reset();
 private:
-    static TIM_HandleTypeDef htim2;
-#ifdef CORE_CM7
-    static TIM_HandleTypeDef htim5; // only used during init
-#endif
+    static uint32_t lastTIM2Value;
+    static uint32_t lastTIM5Value;
 };
 #endif // HARDWARE_TIMER_H

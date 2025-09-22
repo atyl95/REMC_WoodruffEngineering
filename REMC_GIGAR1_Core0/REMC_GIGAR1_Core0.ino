@@ -10,7 +10,6 @@
 #include "NTPClient.h"
 #include "Config.h"
 
-
 void setup() { 
   Serial.begin(115200);
   while (!Serial) { }    // wait (native-USB boards)
@@ -57,7 +56,6 @@ void setup() {
   } else {
       Serial.println("[Serial Core] Failed to initialize hardware timer");
   }
-
   
   // Starts Sampling Core (1)
   RPC.begin();
@@ -79,14 +77,28 @@ void loop() {
   // Handle incoming UDP commands
   UdpManager::update();
 
-  static uint32_t last_print = 0;
-  uint32_t current_time = HardwareTimer::getMicros64();
+  static uint64_t last_print = 0;
+  uint64_t current_time = HardwareTimer::getMicros64();
 
-//   // Print every 1 second (1,000,000 microseconds)
-//   if (current_time - last_print >= 1000000) {
-//     Serial.println("[Serial Core] Timer micros: " + String(current_time));
-//     last_print = current_time;
-//   }
+  static int slammed_once = 0;
+  // Print every 1 second (1,000,000 microseconds)
+  if (current_time - last_print >= 1000000) {
+      char buf[32];
+      snprintf(buf, sizeof(buf), "%" PRIu64, current_time);
+      Serial.print("[Serial Core] Timer micros: ");
+      Serial.println(buf);
+    Serial.println("[Serial Core] TIM5 rollover: " + String(TIM5->CNT));
+
+    if (slammed_once == 0)
+    {
+      TIM_HandleTypeDef t2;
+      t2.Instance = TIM2;
+      __HAL_TIM_SET_COUNTER(&t2, 4290967295);
+      slammed_once = 1;
+    }
+
+    last_print = current_time;
+  }
 }
 
 // ===== DEBUG FUNCTIONS FROM M4 CORE =====
