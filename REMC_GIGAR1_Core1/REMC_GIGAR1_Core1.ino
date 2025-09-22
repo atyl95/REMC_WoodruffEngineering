@@ -28,6 +28,7 @@ uint16_t tempSampleCounter = TEMP_DIVIDER_THRESHOLD;
 void push_sample() {
   // Capture timestamp FIRST for maximum accuracy
   uint32_t sample_time = HardwareTimer::getMicros();
+  uint32_t rollover_count = HardwareTimer::getRolloverCount();
   
   // Read all ADC inputs in sequence (minimize timing variation)
   uint16_t swI_raw = ain_switchCurrent.read_u16() >> 4;
@@ -51,10 +52,10 @@ void push_sample() {
   s.outB = outB_raw;
   s.t1 = temp_raw;
   s.t_us = sample_time;
+  s.rollover_count = rollover_count;
   
   SharedRing_Add(s);
 }
-
 void setup() {
   
   // LOGGER SETUP
@@ -96,14 +97,17 @@ constexpr uint32_t SAMPLE_INTERVAL_US = 100;
 static uint32_t next_sample_time = 0;
 static bool first_sample = true;
 
+
+
 void loop() {
+  uint32_t current_time = HardwareTimer::getMicros();
+
   // Wait for precise timing at the start of loop (eliminates loop overhead)
   while ((int32_t)(micros() - next_sample_time) < 0) {
     // Busy wait for precise timing
     __asm volatile("nop");
   }
   
-  uint32_t current_time = micros();
   
   // Initialize timing on first sample
   if (first_sample) {
