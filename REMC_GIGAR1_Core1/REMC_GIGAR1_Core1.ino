@@ -35,14 +35,14 @@ void push_sample(uint32_t atMicros) {
   uint16_t swV_raw = ain_switchVoltage.read_u16() >> 4;
   uint16_t outA_raw = ain_outA.read_u16() >> 4;
   uint16_t outB_raw = ain_outB.read_u16() >> 4;
-  
-  // Throttle temperature read (avoid conditional execution timing variation)
-  uint16_t temp_raw = g_temp1Raw; // Use previous value by default
-  tempSampleCounter++;
-  if (tempSampleCounter >= TEMP_DIVIDER_THRESHOLD) {
-    g_temp1Raw = temp_raw = ain_temp1.read_u16() >> 4;
-    tempSampleCounter = 0;
-  }
+  uint16_t temp_raw = ain_temp1.read_u16() >> 4;
+  // // Throttle temperature read (avoid conditional execution timing variation)
+  // uint16_t temp_raw = g_temp1Raw; // Use previous value by default
+  // tempSampleCounter++;
+  // if (tempSampleCounter >= TEMP_DIVIDER_THRESHOLD) {
+  //   g_temp1Raw = temp_raw = ain_temp1.read_u16() >> 4;
+  //   tempSampleCounter = 0;
+  // }
   
   // Build sample struct efficiently
   Sample s;
@@ -88,6 +88,7 @@ void setup() {
     delay(1);
   }
   Logger::log("[Sampling Core] Hardware timer initialized successfully");
+  
 }
 
 
@@ -102,14 +103,13 @@ static bool first_sample = true;
 void loop() {
 
   // Wait for precise timing at the start of loop (eliminates loop overhead)
-  while ((int32_t)(HardwareTimer::getMicros() - next_sample_time) < 0) {
+  uint32_t current_time;
+  while ((int32_t)((current_time = HardwareTimer::getMicros()) - next_sample_time) < 0) {
     // Busy wait for precise timing
     __asm volatile("nop");
   }
   
-  
   // Initialize timing on first sample
-  uint32_t current_time = HardwareTimer::getMicros();
   if (first_sample) {
     next_sample_time = current_time + SAMPLE_INTERVAL_US;
     first_sample = false;

@@ -245,7 +245,7 @@ void update() {
         } else {
           Serial.println(F("StateManager: ARMED_READY → FIRE"));
           currentState = SystemState::STATE_FIRING;
-          SampleCollector::startGathering();
+          SampleCollector::startGathering(-50000,50000);
         }
         stateStartMs = millis();
       }

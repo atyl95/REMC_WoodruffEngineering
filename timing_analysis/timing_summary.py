@@ -14,10 +14,10 @@ def timing_summary(csv_file):
     
     # Read the CSV file
     df = pd.read_csv(csv_file)
-    sample_micros = df['sample_micros'].values
+    sample_timestamp_us = df['sample_timestamp_us'].values
     
     # Calculate time differences between consecutive samples
-    time_diffs = np.diff(sample_micros)
+    time_diffs = np.diff(sample_timestamp_us)
     
     # Expected interval
     expected_interval = 100.0
