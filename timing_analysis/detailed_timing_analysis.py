@@ -19,13 +19,13 @@ def analyze_timing_detailed(csv_file):
     print(f"Total samples: {len(samples)}")
     print()
     
-    # Convert sample_micros to integers
-    sample_micros = [int(row['sample_micros']) for row in samples]
+    # Convert sample_timestamp_us to integers
+    sample_timestamp_us = [int(row['sample_timestamp_us']) for row in samples]
     
     # Calculate time differences
     time_diffs = []
-    for i in range(1, len(sample_micros)):
-        diff = sample_micros[i] - sample_micros[i-1]
+    for i in range(1, len(sample_timestamp_us)):
+        diff = sample_timestamp_us[i] - sample_timestamp_us[i-1]
         time_diffs.append(diff)
     
     # Find the large gap
@@ -47,7 +47,7 @@ def analyze_timing_detailed(csv_file):
     
     for i in range(start_idx, end_idx):
         sample_num = i + 1
-        time_us = sample_micros[i]
+        time_us = sample_timestamp_us[i]
         diff = time_diffs[i-1] if i > 0 else 0
         timestamp = samples[i]['timestamp']
         
@@ -57,8 +57,8 @@ def analyze_timing_detailed(csv_file):
     print()
     
     # Analyze the gap more
-    gap_start_time = sample_micros[max_diff_index]
-    gap_end_time = sample_micros[max_diff_index + 1]
+    gap_start_time = sample_timestamp_us[max_diff_index]
+    gap_end_time = sample_timestamp_us[max_diff_index + 1]
     gap_duration = gap_end_time - gap_start_time
     
     print(f"Gap analysis:")

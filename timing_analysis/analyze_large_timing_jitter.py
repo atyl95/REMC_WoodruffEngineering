@@ -35,12 +35,12 @@ def analyze_large_timing_jitter(csv_file):
     print(f"✓ File read complete in {read_time:.1f} seconds")
     print(f"Total samples: {len(df):,}")
     
-    # Get the sample_micros column
-    sample_micros = df['sample_micros'].values
+    # Get the sample_timestamp_us column
+    sample_timestamp_us = df['sample_timestamp_us'].values
     
     print("Calculating time differences...")
     # Calculate time differences between consecutive samples
-    time_diffs = np.diff(sample_micros)
+    time_diffs = np.diff(sample_timestamp_us)
     
     # Expected interval is 100 microseconds
     expected_interval = 100.0
@@ -72,11 +72,12 @@ def analyze_large_timing_jitter(csv_file):
     print("\n" + "="*80)
     print("LARGE DATASET TIMING ANALYSIS RESULTS")
     print("="*80)
-    print(f"Total samples: {len(sample_micros):,}")
+    print(f"Total samples: {len(sample_timestamp_us):,}")
     print(f"Time differences calculated: {len(time_diffs):,}")
     print(f"Expected interval: {expected_interval:.1f} μs")
     print(f"Actual mean interval: {mean_interval:.3f} μs")
     print(f"Standard deviation: {std_interval:.3f} μs")
+    print(f"2σ bounds: {mean_interval - 2*std_interval:.1f} - {mean_interval + 2*std_interval:.1f} μs")
     print(f"Min interval: {min_interval:.3f} μs")
     print(f"Max interval: {max_interval:.3f} μs")
     print(f"Mean deviation from expected: {abs(mean_interval - expected_interval):.3f} μs")
@@ -117,36 +118,41 @@ def analyze_large_timing_jitter(csv_file):
             gap_ms = gap_value / 1000
             print(f"  Sample {sample_num:,}: {gap_value:.1f} μs ({gap_ms:.1f} ms)")
     
-    # Create a simplified plot for large datasets
+    # Create plot with full dataset
     print("\nGenerating visualization...")
     plt.figure(figsize=(15, 10))
     
-    # Sample every 1000th point for plotting to avoid memory issues
-    plot_step = max(1, len(time_diffs) // 10000)  # Show max 10k points
-    plot_indices = np.arange(0, len(time_diffs), plot_step)
-    plot_diffs = time_diffs[plot_indices]
+    # Calculate 2-sigma bounds
+    two_sigma = 2 * std_interval
+    upper_2sigma = mean_interval + two_sigma
+    lower_2sigma = mean_interval - two_sigma
     
-    # Plot 1: Time differences over sample number (sampled)
+    # Plot 1: Time differences over sample number (FULL DATASET with better visibility)
     plt.subplot(2, 1, 1)
-    plt.plot(plot_indices, plot_diffs, 'b-', alpha=0.7, linewidth=0.5)
-    plt.axhline(y=expected_interval, color='r', linestyle='--', label=f'Expected: {expected_interval} μs')
-    plt.axhline(y=mean_interval, color='g', linestyle='-', label=f'Mean: {mean_interval:.1f} μs')
-    plt.axhline(y=mean_interval + 2*std_interval, color='orange', linestyle=':', alpha=0.7, label='±2σ')
-    plt.axhline(y=mean_interval - 2*std_interval, color='orange', linestyle=':', alpha=0.7)
+    
+    # Use line plot with very thin lines and transparency for better visibility
+    plt.plot(time_diffs, 'b-', alpha=0.4, linewidth=0.3)
+    
+    # Add only 2σ reference lines
+    plt.axhline(y=upper_2sigma, color='orange', linestyle=':', linewidth=2, label=f'+2σ: {upper_2sigma:.1f} μs')
+    plt.axhline(y=lower_2sigma, color='orange', linestyle=':', linewidth=2, label=f'-2σ: {lower_2sigma:.1f} μs')
+    
     plt.xlabel('Sample Number')
     plt.ylabel('Time Difference (μs)')
-    plt.title(f'Sample Intervals Over Time (showing every {plot_step}th sample)')
+    plt.title(f'Sample Intervals Over Time ({len(time_diffs):,} samples)\nσ = {std_interval:.3f} μs, 2σ = {two_sigma:.3f} μs')
     plt.legend()
     plt.grid(True, alpha=0.3)
     
-    # Plot 2: Histogram of time differences (sampled)
+    # Plot 2: Histogram of time differences
     plt.subplot(2, 1, 2)
-    plt.hist(plot_diffs, bins=100, alpha=0.7, edgecolor='black')
+    plt.hist(time_diffs, bins=100, alpha=0.7, edgecolor='black')
     plt.axvline(x=expected_interval, color='r', linestyle='--', label=f'Expected: {expected_interval} μs')
     plt.axvline(x=mean_interval, color='g', linestyle='-', label=f'Mean: {mean_interval:.1f} μs')
+    plt.axvline(x=upper_2sigma, color='orange', linestyle=':', alpha=0.7, label=f'+2σ: {upper_2sigma:.1f} μs')
+    plt.axvline(x=lower_2sigma, color='orange', linestyle=':', alpha=0.7, label=f'-2σ: {lower_2sigma:.1f} μs')
     plt.xlabel('Time Difference (μs)')
     plt.ylabel('Frequency')
-    plt.title(f'Distribution of Sample Intervals (showing every {plot_step}th sample)')
+    plt.title(f'Distribution of Sample Intervals ({len(time_diffs):,} samples)\n2σ bounds: {lower_2sigma:.1f} - {upper_2sigma:.1f} μs')
     plt.legend()
     plt.grid(True, alpha=0.3)
     

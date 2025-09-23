@@ -189,7 +189,6 @@ LOGGING_DATA_FIELDS = [
     'timestamp',            # float seconds since epoch, derived per sample
     'sample_timestamp_us',  # precise microseconds per sample (if present)
     'sample_timestamp_iso', # human readable string
-    'sample_micros',
     'switch_voltage_kv',
     'switch_current_a',
     'output_voltage_a_kv',
@@ -260,7 +259,6 @@ def udp_listener_thread():
                         'sample_timestamp_iso': ts_iso,
                         'timestamp': ts_float,  # float seconds for UI/CSV
                         'sample_timestamp_us': s.get('sample_timestamp_us'),
-                        'sample_micros' : s.get('sample_micros'),
                         'switch_voltage_kv': s.get('switch_voltage_kv'),
                         'switch_current_a': s.get('switch_current_a'),
                         'output_voltage_a_kv': s.get('output_voltage_a_kv'),
