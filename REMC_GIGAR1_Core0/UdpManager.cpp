@@ -61,6 +61,7 @@ struct TelemetrySample {
   float sv, sc, ova, ovb, tm1;
   uint64_t us;  // NTP timestamp in microseconds (from TimeMapper)
   uint8_t ready, em, a, b, manual, hold;
+  uint64_t us_end;  // NTP timestamp in microseconds (from TimeMapper)
 };
 
 // ADC conversion constants (copied from old TimerManager)
@@ -236,7 +237,7 @@ bool addSample(const Sample& sample) {
   ts.ovb = convertOutputVoltageBKV(sample.outB);
   ts.tm1 = convertTemp1DegC(sample.t1);
   ts.us = TimeMapper::sampleToNTP(sample.t_us, sample.rollover_count);
-  
+  ts.us_end = TimeMapper::sampleToNTP(sample.t_us_end, sample.rollover_count_end);
   // Get these from state manager 
   ts.ready = StateManager::isReady() ? 1 : 0;
   ts.em = StateManager::isEmActActive() ? 1 : 0;
