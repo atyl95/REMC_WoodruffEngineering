@@ -32,7 +32,7 @@ void SharedRing_Init() {
 }
 
 // ---------------- Producer ----------------
-void SharedRing_Add(const Sample& sample) {
+void SharedRing_Add(const REMCSample& sample) {
   const uint32_t cap     = g_ring.capacity;
   const uint32_t mask    = cap - 1u;
 
@@ -68,7 +68,7 @@ void SharedRing_Add(const Sample& sample) {
 // ---------------- Consumer ----------------
 // Copies up to max_samples into out (if max_samples < 0, copy all available).
 // Returns number of samples copied.
-size_t SharedRing_Consume(Sample* out, int32_t max_samples) {
+size_t SharedRing_Consume(REMCSample* out, int32_t max_samples) {
   if (!out) return 0;
 
   const uint32_t cap  = g_ring.capacity;

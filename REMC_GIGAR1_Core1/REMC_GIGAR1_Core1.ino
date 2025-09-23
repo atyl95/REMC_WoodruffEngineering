@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <RPC.h>
 #include <mbed.h>
+#include <AdvancedADC.h>
 
 #include "SharedRing.h"
 #include "Logger.h"
@@ -9,53 +10,57 @@
 
 using namespace std::chrono_literals;  // enables 100us, 10ms, etc.
 
-// Fast AnalogIn handles (GIGA / ArduinoCore-mbed)
-static mbed::AnalogIn ain_switchCurrent((PinName)digitalPinToPinName(PIN_SWITCH_CURRENT));
-static mbed::AnalogIn ain_switchVoltage((PinName)digitalPinToPinName(PIN_SWITCH_VOLTAGE));
-static mbed::AnalogIn ain_outA((PinName)digitalPinToPinName(PIN_OUTPUT_VOLTAGE_A));
-static mbed::AnalogIn ain_outB((PinName)digitalPinToPinName(PIN_OUTPUT_VOLTAGE_B));
-static mbed::AnalogIn ain_temp1((PinName)digitalPinToPinName(PIN_TEMP_1));
+// 5 channels in one scan (minimizes inter-channel skew to ~conversion time)
+static AdvancedADC adc(
+  PIN_SWITCH_CURRENT,
+  PIN_SWITCH_VOLTAGE,
+  PIN_OUTPUT_VOLTAGE_A,
+  PIN_OUTPUT_VOLTAGE_B,
+  PIN_TEMP_1
+);
 
-volatile uint16_t g_switchCurrentRaw = 0;
-volatile uint16_t g_switchVoltageRaw = 0;
-volatile uint16_t g_outputVoltageARaw = 0;
-volatile uint16_t g_outputVoltageBRaw = 0;
-volatile uint16_t g_temp1Raw = 0;
-// Divider for slower temperature sampling
-const uint16_t TEMP_DIVIDER_THRESHOLD = 10000;
-uint16_t tempSampleCounter = TEMP_DIVIDER_THRESHOLD;
+// 10 kHz
+constexpr uint32_t SAMPLE_INTERVAL_US = 100;
+constexpr uint32_t SAMPLE_HZ = 1000000UL / SAMPLE_INTERVAL_US; 
 
-void push_sample() {
-
-  // Capture timestamp FIRST for maximum accuracy
-  uint32_t sample_time = HardwareTimer::getMicros();
-  uint32_t rollover_count = HardwareTimer::getRolloverCount();
-  
-  // Read all ADC inputs in sequence (minimize timing variation)
-  uint16_t swI_raw = ain_switchCurrent.read_u16() >> 4;
-  uint16_t swV_raw = ain_switchVoltage.read_u16() >> 4;
-  uint16_t outA_raw = ain_outA.read_u16() >> 4;
-  uint16_t outB_raw = ain_outB.read_u16() >> 4;
-  uint16_t temp_raw = ain_temp1.read_u16() >> 4;
-
-  // Capture end timestamp AFTER all ADC readings are complete
-  uint32_t sample_time_end = HardwareTimer::getMicros();
-  uint32_t rollover_count_end = HardwareTimer::getRolloverCount();
-
-  // Build sample struct efficiently
-  Sample s;
-  s.swI = swI_raw;
-  s.swV = swV_raw;
-  s.outA = outA_raw;
-  s.outB = outB_raw;
-  s.t1 = temp_raw;
-  s.t_us = sample_time;
-  s.rollover_count = rollover_count;
-  s.t_us_end = sample_time_end;
-  s.rollover_count_end = rollover_count_end;
-
-  SharedRing_Add(s);
+// --- epoch + index, using 64-bit timer ---
+static uint64_t g_epoch_us64 = 0;     // set right after adc.begin()
+static uint64_t g_sample_idx = 0;     // increments per sample drained
+// helper: split 64-bit µs timestamp into (t_us, rollover_count)
+static inline void decompose_us64(uint64_t t64, uint32_t &t_us, uint32_t &roll) {
+  t_us = (uint32_t)(t64 & 0xFFFFFFFFULL);
+  roll = (uint32_t)(t64 >> 32);
 }
+
+void push_samples_until_caught_up() {
+  while (adc.available()) {
+    SampleBuffer buf = adc.read();
+
+    REMCSample s;
+    s.swI  = (uint16_t)buf[0];
+    s.swV  = (uint16_t)buf[1];
+    s.outA = (uint16_t)buf[2];
+    s.outB = (uint16_t)buf[3];
+    s.t1   = (uint16_t)buf[4];
+
+    // Aaron Note 9.23.2025
+    // The samples are all being captured in the library so I really have no idea what the true start times and end times are.. But it's hardware based
+    // so in place of that we will:
+    // Exact 64-bit timestamps tied to index on a 100 µs grid
+    const uint64_t t64_start = g_epoch_us64 + g_sample_idx * (uint64_t)SAMPLE_INTERVAL_US;
+    const uint64_t t64_end   = t64_start + 0;
+
+    // Decompose into (t_us, rollover_count) so they ALWAYS match the sample
+    decompose_us64(t64_start, s.t_us, s.rollover_count);
+    decompose_us64(t64_end,   s.t_us_end, s.rollover_count_end);
+
+    SharedRing_Add(s);
+    buf.release();
+
+    ++g_sample_idx;
+  }
+}
+
 void setup() {
   
   // LOGGER SETUP
@@ -69,12 +74,14 @@ void setup() {
   Logger::log("[Sampling Core] Logger debugging over RPC");
 #endif
 
-  // PIN SETUP
-  pinMode(PIN_SWITCH_CURRENT, INPUT);
-  pinMode(PIN_SWITCH_VOLTAGE, INPUT);
-  pinMode(PIN_TEMP_1, INPUT);
-  pinMode(PIN_OUTPUT_VOLTAGE_A, INPUT);
-  pinMode(PIN_OUTPUT_VOLTAGE_B, INPUT);
+  // resolution, sample_rate_hz, n_samples_per_buffer, buffer_pool_depth
+  if (!adc.begin(AN_RESOLUTION_12, SAMPLE_HZ, /*n_samples=*/1, /*n_buffers=*/128)) {
+    Logger::log("[Sampling Core] AdvancedADC begin() failed");
+    while (1) { __ASM volatile("nop"); }
+  }
+  // Anchor the epoch *immediately after* the ADC starts
+  g_epoch_us64 = HardwareTimer::getMicros64();
+  g_sample_idx = 0;
 
   // SHARED RING BUFFER SETUP
   Logger::log("[Sampling Core] SharedRing Address");
@@ -91,39 +98,6 @@ void setup() {
   
 }
 
-
-constexpr uint32_t SAMPLE_INTERVAL_US = 100;
-
-// Pre-calculated timing for better precision
-static uint32_t next_sample_time = 0;
-static bool first_sample = true;
-
-
-
 void loop() {
-
-  // Wait for precise timing at the start of loop (eliminates loop overhead)
-  uint32_t current_time;
-  while ((int32_t)((current_time = HardwareTimer::getMicros()) - next_sample_time) < 0) {
-    // Busy wait for precise timing
-    __asm volatile("nop");
-  }
-  
-  // Initialize timing on first sample
-  if (first_sample) {
-    next_sample_time = current_time + SAMPLE_INTERVAL_US;
-    first_sample = false;
-    return; // Skip first sample to establish timing baseline
-  }
-  
-  // Sample immediately when timing is met (no additional time checks)
-  push_sample();
-  
-  // Schedule next sample time (accumulative to prevent drift)
-  next_sample_time += SAMPLE_INTERVAL_US;
-  
-  // Handle case where we're running behind (skip missed samples)
-  if ((int32_t)(current_time - next_sample_time) > (int32_t)SAMPLE_INTERVAL_US) {
-    next_sample_time = current_time + SAMPLE_INTERVAL_US;
-  }
+  push_samples_until_caught_up();
 }
