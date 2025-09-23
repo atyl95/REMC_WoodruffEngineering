@@ -26,6 +26,7 @@ const uint16_t TEMP_DIVIDER_THRESHOLD = 10000;
 uint16_t tempSampleCounter = TEMP_DIVIDER_THRESHOLD;
 
 void push_sample(uint32_t atMicros) {
+
   // Capture timestamp FIRST for maximum accuracy
   uint32_t sample_time = atMicros;
   uint32_t rollover_count = HardwareTimer::getRolloverCount();
@@ -36,14 +37,7 @@ void push_sample(uint32_t atMicros) {
   uint16_t outA_raw = ain_outA.read_u16() >> 4;
   uint16_t outB_raw = ain_outB.read_u16() >> 4;
   uint16_t temp_raw = ain_temp1.read_u16() >> 4;
-  // // Throttle temperature read (avoid conditional execution timing variation)
-  // uint16_t temp_raw = g_temp1Raw; // Use previous value by default
-  // tempSampleCounter++;
-  // if (tempSampleCounter >= TEMP_DIVIDER_THRESHOLD) {
-  //   g_temp1Raw = temp_raw = ain_temp1.read_u16() >> 4;
-  //   tempSampleCounter = 0;
-  // }
-  
+
   // Build sample struct efficiently
   Sample s;
   s.swI = swI_raw;
@@ -54,6 +48,12 @@ void push_sample(uint32_t atMicros) {
   s.t_us = sample_time;
   s.rollover_count = rollover_count;
   
+  uint32_t sample_time_end = atMicros;
+  uint32_t rollover_count_end = HardwareTimer::getRolloverCount();
+  
+  s.t_us_end = sample_time_end;
+  s.rollover_count_end = rollover_count_end;
+
   SharedRing_Add(s);
 }
 void setup() {
