@@ -3,11 +3,17 @@
 #include "SDRAM.h"
 
 // Static member definitions
-Sample* SampleCollector::sampleStorage = nullptr;
-volatile size_t SampleCollector::storageCapacity = 0;
-volatile size_t SampleCollector::storageIndex = 0;
+Sample* SampleCollector::ringBuffer = nullptr;
+volatile size_t SampleCollector::ringCapacity = 0;
+volatile size_t SampleCollector::ringHead = 0;
+volatile size_t SampleCollector::totalSamplesReceived = 0;
+
 volatile bool SampleCollector::gatheringActive = false;
-volatile size_t SampleCollector::totalSamplesStored = 0;
+volatile int SampleCollector::gatheringStart = 0;
+volatile int SampleCollector::gatheringStop = 0;
+volatile size_t SampleCollector::samplesNeeded = 0;
+volatile size_t SampleCollector::samplesCollected = 0;
+volatile size_t SampleCollector::gatheringStartSampleCount = 0;
 
 Sample SampleCollector::sampleBuffer[MAX_FETCH];
 Sample SampleCollector::ringBuf[WINDOW];
@@ -15,32 +21,37 @@ int SampleCollector::ringCount = 0;
 int SampleCollector::ringIndex = 0;
 
 bool SampleCollector::init(size_t capacity) {
-    storageCapacity = capacity;
+    ringCapacity = capacity;
     
     // Initialize SharedRing buffer
     Serial.print("[SampleCollector] SharedRing Address ");
     Serial.println((uintptr_t)&g_ring, HEX);
     SharedRing_Init();
     
-    // Allocate sample storage in external SDRAM
-    Serial.print("[SampleCollector] Allocating storage for ");
-    Serial.print(storageCapacity);
+    // Allocate ring buffer storage in external SDRAM
+    Serial.print("[SampleCollector] Allocating ring buffer for ");
+    Serial.print(ringCapacity);
     Serial.print(" samples (");
-    Serial.print((storageCapacity * sizeof(Sample)) / (1024.0*1024.0), 2);
+    Serial.print((ringCapacity * sizeof(Sample)) / (1024.0*1024.0), 2);
     Serial.println(" MB)");
     
-    sampleStorage = (Sample*) SDRAM.malloc(storageCapacity * sizeof(Sample));
-    if (sampleStorage == nullptr) {
-        Serial.println("[SampleCollector] ERROR: Failed to allocate sample storage!");
+    ringBuffer = (Sample*) SDRAM.malloc(ringCapacity * sizeof(Sample));
+    if (ringBuffer == nullptr) {
+        Serial.println("[SampleCollector] ERROR: Failed to allocate ring buffer storage!");
         return false;
     }
     
-    Serial.println("[SampleCollector] Sample storage allocated successfully");
+    Serial.println("[SampleCollector] Ring buffer storage allocated successfully");
     
     // Reset state
-    storageIndex = 0;
-    totalSamplesStored = 0;
+    ringHead = 0;
+    totalSamplesReceived = 0;
     gatheringActive = false;
+    gatheringStart = 0;
+    gatheringStop = 0;
+    samplesNeeded = 0;
+    samplesCollected = 0;
+    gatheringStartSampleCount = 0;
     ringCount = 0;
     ringIndex = 0;
     
@@ -51,139 +62,104 @@ void SampleCollector::update() {
     
     // Always consume samples from SharedRing (Core1 never stops sampling)
     size_t count = SharedRing_Consume(sampleBuffer, MAX_FETCH);
-    if (count > 0 && gatheringActive) {
-        processSamples(count);
+    if (count > 0) {
+
+        for (size_t i = 0; i < count; i++) {
+            storeSampleInRing(sampleBuffer[i]);
+        }
+        
+        // If gathering is active, check if we can send samples now
+        if (gatheringActive && canSendNow()) {
+            extractRequestedSamples();
+        }
+        
         // Show status occasionally
         static uint32_t debug_counter = 0;
         debug_counter++;
         if (debug_counter % 20000 == 0) {
             Serial.print("Overruns:");
             Serial.print(g_ring.overruns);
-            Serial.print(" STORED:");
-            Serial.print(SampleCollector::getSamplesStored());
-            Serial.print("/");
-            Serial.println(SampleCollector::getStorageCapacity());
+            Serial.print(" Received from M4:");
+            Serial.print(totalSamplesReceived);
+            Serial.println();
         }
     }
-
-
 }
 
-void SampleCollector::processSamples(size_t count) {
-    // GATHERING MODE: Store samples in storage buffer
-    for (size_t i = 0; i < count; i++) {
-        storeSample(sampleBuffer[i]);
-        if (storageIndex >= storageCapacity) {
-            // Storage full - update count before stopping
-            totalSamplesStored = storageIndex;
-            stopGathering();
-            
-            // TEMPORARY BEFORE RECEIVING COMMANDS
-            sendAllSamples();
-            break;
-        }
-    }
-    totalSamplesStored = storageIndex;
-}
-
-void SampleCollector::storeSample(const Sample& sample) {
-    if (storageIndex < storageCapacity) {
-        sampleStorage[storageIndex] = sample;
-        storageIndex++;
-    }
-}
-
-void SampleCollector::startGathering() {
-    Serial.println("[SampleCollector] Starting sample gathering");
+void SampleCollector::storeSampleInRing(const Sample& sample) {
+    // Store sample in ring buffer at current head position
+    ringBuffer[ringHead] = sample;
     
-    // Reset storage
-    storageIndex = 0;
-    totalSamplesStored = 0;
+    // Advance head pointer (wrap around at capacity)
+    ringHead = (ringHead + 1) % ringCapacity;
+    
+    // Increment total samples received
+    totalSamplesReceived++;
+}
+
+void SampleCollector::startGathering(int start, int stop) {
+    Serial.print("[SampleCollector] Starting sample gathering - start: ");
+    Serial.print(start);
+    Serial.print(", stop: ");
+    Serial.println(stop);
+    
+    // Validate parameters
+    if (stop <= start) {
+        Serial.println("[SampleCollector] ERROR: stop must be greater than start");
+        return;
+    }
+    
+    // Store gathering parameters
+    gatheringStart = start;
+    gatheringStop = stop;
+    samplesNeeded = stop - start;
+    samplesCollected = 0;
+    gatheringStartSampleCount = totalSamplesReceived;
     
     // Enable gathering
     gatheringActive = true;
     
-    Serial.print("[SampleCollector] Gathering started - storage capacity: ");
-    Serial.print(storageCapacity);
+    Serial.print("[SampleCollector] Gathering configured for ");
+    Serial.print(samplesNeeded);
     Serial.print(" samples (");
-    Serial.print((float)storageCapacity / 10000.0, 1);  // Convert to seconds with 1 decimal
+    Serial.print((float)samplesNeeded / 10000.0, 1);  // Convert to seconds with 1 decimal
     Serial.println(" seconds)");
+    
+    // If start is negative and we have enough samples in ring buffer, we can potentially send immediately
+    if (start < 0 && totalSamplesReceived >= (size_t)(-start)) {
+        Serial.println("[SampleCollector] Historical samples available");
+    } else if (start < 0) {
+        Serial.print("[SampleCollector] Need ");
+        Serial.print((-start) - totalSamplesReceived);
+        Serial.println(" more historical samples");
+    }
 }
 
 void SampleCollector::stopGathering() {
     Serial.print("[SampleCollector] Stopping sample gathering - collected ");
-    Serial.print(totalSamplesStored);
+    Serial.print(samplesCollected);
+    Serial.print("/");
+    Serial.print(samplesNeeded);
     Serial.println(" samples");
     
-    // Disable gathering but keep stored samples
+    // Disable gathering
     gatheringActive = false;
 }
 
 void SampleCollector::sendAllSamples() {
-    if (totalSamplesStored == 0) {
-        Serial.println("[SampleCollector] No samples to send");
+    if (!gatheringActive) {
+        Serial.println("[SampleCollector] No active gathering to send");
         return;
     }
     
-    Serial.print("[SampleCollector] Sending ");
-    Serial.print(totalSamplesStored);
-    Serial.println(" samples over UDP...");
+    Serial.println("[SampleCollector] Force sending all samples from current gathering...");
     
-    uint32_t startTime = millis();
-    size_t packetsSent = 0;
-    size_t samplesSent = 0;
-    
-    // Send samples in optimal-sized batches (46 samples per UDP packet)
-    constexpr size_t SAMPLES_PER_PACKET = 46;
-    
-    for (size_t i = 0; i < totalSamplesStored; i += SAMPLES_PER_PACKET) {
-        size_t remainingSamples = totalSamplesStored - i;
-        size_t batchSize = min(remainingSamples, SAMPLES_PER_PACKET);
-        
-        // Send this batch
-        for (size_t j = 0; j < batchSize; j++) {
-            UdpManager::addSample(sampleStorage[i + j]);
-        }
-        UdpManager::flushSamples();
-        
-        packetsSent++;
-        samplesSent += batchSize;
-        
-        // Show progress every 1000 packets
-        if (packetsSent % 1000 == 0) {
-            Serial.print("[SampleCollector] Sent ");
-            Serial.print(samplesSent);
-            Serial.print("/");
-            Serial.print(totalSamplesStored);
-            Serial.println(" samples");
-        }
-        
-        // Small delay to prevent overwhelming the UDP stack
-        if (packetsSent % 100 == 0) {
-            delay(1); // 1ms pause every 100 packets
-        }
-    }
-    
-    uint32_t duration = millis() - startTime;
-    
-    Serial.print("[SampleCollector] Transmission complete: ");
-    Serial.print(packetsSent);
-    Serial.print(" packets, ");
-    Serial.print(samplesSent);
-    Serial.print(" samples in ");
-    Serial.print(duration);
-    Serial.println("ms");
-    
-    // Calculate transmission rate
-    if (duration > 0) {
-        Serial.print("[SampleCollector] Transmission rate: ");
-        Serial.print((samplesSent * 1000) / duration);
-        Serial.println(" samples/second");
-    }
+    // Force extract samples even if not all future samples are ready
+    extractRequestedSamples();
 }
 
 size_t SampleCollector::getSamplesStored() {
-    return totalSamplesStored;
+    return samplesCollected;
 }
 
 bool SampleCollector::isGathering() {
@@ -191,7 +167,103 @@ bool SampleCollector::isGathering() {
 }
 
 size_t SampleCollector::getStorageCapacity() {
-    return storageCapacity;
+    return ringCapacity;
+}
+
+bool SampleCollector::canSendNow() {
+    // If stop is <= 0, all samples are historical, we can send immediately
+    if (gatheringStop <= 0) {
+        // Check if we have enough historical samples
+        if (gatheringStart < 0) {
+            size_t historicalNeeded = (size_t)(-gatheringStart);
+            size_t availableHistorical = min(totalSamplesReceived, ringCapacity);
+            return availableHistorical >= historicalNeeded;
+        }
+        return true; // All samples from 0 to stop are historical
+    }
+    
+    // If stop > 0, we need future samples
+    // Check if we've received enough samples since gathering started
+    size_t samplesSinceStart = totalSamplesReceived - gatheringStartSampleCount;
+    return samplesSinceStart >= (size_t)gatheringStop;
+}
+
+size_t SampleCollector::getRingIndex(int relativeIndex, size_t referenceSampleCount) {
+    // Convert relative index to absolute ring buffer index
+    // relativeIndex is relative to the reference point (when gathering started)
+    // referenceSampleCount is the total samples received at reference point
+    
+    if (totalSamplesReceived == 0) {
+        return 0; // No samples yet
+    }
+    
+    // Calculate absolute sample number
+    size_t absoluteSampleNumber = referenceSampleCount + relativeIndex;
+    
+    // If this sample hasn't been received yet, return invalid index
+    if (absoluteSampleNumber >= totalSamplesReceived) {
+        return ringCapacity; // Invalid index marker
+    }
+    
+    // If this sample is too old (overwritten), return invalid index
+    size_t oldestAvailable = totalSamplesReceived >= ringCapacity ? 
+                            totalSamplesReceived - ringCapacity : 0;
+    if (absoluteSampleNumber < oldestAvailable) {
+        return ringCapacity; // Invalid index marker
+    }
+    
+    // Convert to ring buffer index
+    return absoluteSampleNumber % ringCapacity;
+}
+
+void SampleCollector::extractRequestedSamples() {
+    Serial.println("[SampleCollector] Extracting requested samples...");
+    
+    // Reset samples collected counter
+    samplesCollected = 0;
+    
+    // Extract samples from start to stop relative to when gathering started
+    for (int i = gatheringStart; i < gatheringStop; i++) {
+        size_t ringIndex = getRingIndex(i, gatheringStartSampleCount);
+        
+        // Check if this sample is valid
+        if (ringIndex >= ringCapacity) {
+            if (i < 0) {
+                Serial.print("[SampleCollector] WARNING: Historical sample at index ");
+                Serial.print(i);
+                Serial.println(" is too old and has been overwritten");
+            } else {
+                Serial.print("[SampleCollector] WARNING: Future sample at index ");
+                Serial.print(i);
+                Serial.println(" not yet available");
+                break; // Stop processing if we hit unavailable future samples
+            }
+            continue;
+        }
+        
+        // Add sample to UDP manager for transmission
+        UdpManager::addSample(ringBuffer[ringIndex]);
+        samplesCollected++;
+        
+        // Send in batches to avoid overwhelming UDP stack
+        if (samplesCollected % 46 == 0) {
+            UdpManager::flushSamples();
+        }
+    }
+    
+    // Flush any remaining samples
+    if (samplesCollected % 46 != 0) {
+        UdpManager::flushSamples();
+    }
+    
+    Serial.print("[SampleCollector] Extracted and sent ");
+    Serial.print(samplesCollected);
+    Serial.print("/");
+    Serial.print(samplesNeeded);
+    Serial.println(" samples");
+    
+    // Stop gathering since we've sent the requested samples
+    stopGathering();
 }
 
 void SampleCollector::printSampleDiagnostics(size_t count) {

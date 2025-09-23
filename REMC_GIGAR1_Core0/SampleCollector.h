@@ -8,13 +8,13 @@
 class SampleCollector {
 public:
     // Initialize the sample collector (call once in setup)
-    static bool init(size_t storageCapacity = 300000);
+    static bool init(size_t storageCapacity = 400000);
     
     // Main processing function (call in main loop)
     static void update();
     
     // Control functions
-    static void startGathering();
+    static void startGathering(int start, int stop);
     static void stopGathering();
     static void sendAllSamples();
     
@@ -27,12 +27,19 @@ public:
     static void printSampleDiagnostics(size_t count);
     
 private:
-    // Storage system
-    static Sample* sampleStorage;
-    static volatile size_t storageCapacity;
-    static volatile size_t storageIndex;
+    // Ring buffer storage system
+    static Sample* ringBuffer;
+    static volatile size_t ringCapacity;
+    static volatile size_t ringHead;
+    static volatile size_t totalSamplesReceived;
+    
+    // Gathering state
     static volatile bool gatheringActive;
-    static volatile size_t totalSamplesStored;
+    static volatile int gatheringStart;
+    static volatile int gatheringStop;
+    static volatile size_t samplesNeeded;
+    static volatile size_t samplesCollected;
+    static volatile size_t gatheringStartSampleCount;
     
     // Processing buffer
     static constexpr int MAX_FETCH = 1024;
@@ -45,8 +52,10 @@ private:
     static int ringIndex;
     
     // Helper functions
-    static void processSamples(size_t count);
-    static void storeSample(const Sample& sample);
+    static void storeSampleInRing(const Sample& sample);
+    static void extractRequestedSamples();
+    static size_t getRingIndex(int relativeIndex, size_t referenceSampleCount);
+    static bool canSendNow();
 };
 
 #endif // SAMPLE_COLLECTOR_H
