@@ -15,7 +15,6 @@ namespace UdpManager {
   
   // Main interface - accepts samples and bundles them
   bool addSample(const Sample& sample);
-  size_t addSamplesBulk(const Sample* samples, size_t count);  // Bulk processing - MUCH faster
   void flushSamples();  // Send current bundle
   
   // Command processing

@@ -4,12 +4,12 @@
 
 // Force a consistent layout: 4-byte aligned, no packing shenanigans
 struct __attribute__((aligned(4))) Sample {
-  uint32_t t_us;      // put 32-bit first (keeps struct naturally aligned)
-  uint32_t rollover_count;      // put 32-bit first (keeps struct naturally aligned)
-  uint16_t swI, swV, outA, outB, t1; // 5 * 2 = 10 bytes
+  uint32_t t_us;
+  uint32_t rollover_count;
   uint32_t t_us_end;      
   uint32_t rollover_count_end;
-  uint16_t _pad;      // explicit pad so sizeof(Sample) is 16 bytes everywhere
+  uint16_t swI, swV, outA, outB, t1; // 5 * 2 = 10 bytes
+  uint16_t _pad;      
 };
 
 static_assert(sizeof(Sample) == 28, "Sample must be 28 bytes");

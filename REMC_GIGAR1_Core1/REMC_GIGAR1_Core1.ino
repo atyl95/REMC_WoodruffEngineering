@@ -25,10 +25,10 @@ volatile uint16_t g_temp1Raw = 0;
 const uint16_t TEMP_DIVIDER_THRESHOLD = 10000;
 uint16_t tempSampleCounter = TEMP_DIVIDER_THRESHOLD;
 
-void push_sample(uint32_t atMicros) {
+void push_sample() {
 
   // Capture timestamp FIRST for maximum accuracy
-  uint32_t sample_time = atMicros;
+  uint32_t sample_time = HardwareTimer::getMicros();
   uint32_t rollover_count = HardwareTimer::getRolloverCount();
   
   // Read all ADC inputs in sequence (minimize timing variation)
@@ -37,6 +37,10 @@ void push_sample(uint32_t atMicros) {
   uint16_t outA_raw = ain_outA.read_u16() >> 4;
   uint16_t outB_raw = ain_outB.read_u16() >> 4;
   uint16_t temp_raw = ain_temp1.read_u16() >> 4;
+
+  // Capture end timestamp AFTER all ADC readings are complete
+  uint32_t sample_time_end = HardwareTimer::getMicros();
+  uint32_t rollover_count_end = HardwareTimer::getRolloverCount();
 
   // Build sample struct efficiently
   Sample s;
@@ -47,10 +51,6 @@ void push_sample(uint32_t atMicros) {
   s.t1 = temp_raw;
   s.t_us = sample_time;
   s.rollover_count = rollover_count;
-  
-  uint32_t sample_time_end = atMicros;
-  uint32_t rollover_count_end = HardwareTimer::getRolloverCount();
-  
   s.t_us_end = sample_time_end;
   s.rollover_count_end = rollover_count_end;
 
@@ -117,7 +117,7 @@ void loop() {
   }
   
   // Sample immediately when timing is met (no additional time checks)
-  push_sample(current_time);
+  push_sample();
   
   // Schedule next sample time (accumulative to prevent drift)
   next_sample_time += SAMPLE_INTERVAL_US;
