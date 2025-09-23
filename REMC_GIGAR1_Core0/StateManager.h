@@ -61,6 +61,18 @@ namespace StateManager {
   OperationalStatus getOperationalStatus();
   bool isManualModeActive();
 
+// MSW inputs snapshot (cached each update)
+  struct InputMswSnapshot {
+    // Active-LOW semantics preserved (true == pin is LOW/triggered)
+    bool mswA_low;
+    bool mswB_low;
+    // Optional: timestamp microseconds (when the snapshot was taken)
+    uint32_t read_us;
+  };
+
+// Returns the most recent snapshot captured by StateManager::update()
+InputMswSnapshot getInputMswSnapshot();
+
   // ─── New error flags ────────────────────────────────────────────────────────
   // Bit 0: ARM → MSW_A never triggered within timeout   ("Arm‐timeout")
   // Bit 1: PULL‐BACK → MSW_B never triggered within timeout   ("Pull‐back timeout")

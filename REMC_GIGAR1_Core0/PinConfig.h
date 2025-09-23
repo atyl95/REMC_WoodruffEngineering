@@ -2,11 +2,14 @@
 #ifndef PIN_CONFIG_H
 #define PIN_CONFIG_H
 
+// Fast GPIO helpers for STM32H747 (Arduino Giga)
+#include "stm32h7xx.h"
+
 // Digital Inputs
 #define PIN_ACTUATE      D2
 #define PIN_ARM          D3
-#define PIN_MSW_POS_A    D32
-#define PIN_MSW_POS_B    D34
+#define PIN_MSW_POS_A    D51
+#define PIN_MSW_POS_B    D53
 
 // Digital Outputs
 #define PIN_EM_ACT       D29  // EM Toggle
@@ -23,10 +26,26 @@
 #define PIN_OUTPUT_VOLTAGE_A     A4
 #define PIN_OUTPUT_VOLTAGE_B     A5
 
-// Analog Output Pins (PWM) ***NOT USED***
-// #define PIN_VOLTAGE_A_OUT        D9
-// #define PIN_VOLTAGE_B_OUT        D10
-// #define PIN_VOLTAGE_SWITCH_OUT   D11
-// #define PIN_CURRENT_SWITCH_OUT   D12
+// Map Arduino pins to STM32 ports/bits
+#define MSW_A_GPIO   GPIOE
+#define MSW_A_BIT    5u      // D51 → PE5
+#define MSW_B_GPIO   GPIOG
+#define MSW_B_BIT    7u      // D53 → PG7
+
+// Read ACTIVE-LOW switch states, directly from the ports:
+static inline bool mswA_low_fast() {
+  return (MSW_A_GPIO->IDR & (1u << MSW_A_BIT)) == 0;
+}
+static inline bool mswB_low_fast() {
+  return (MSW_B_GPIO->IDR & (1u << MSW_B_BIT)) == 0;
+}
+
+// Batch read (most deterministic): 1 read per port, then mask
+static inline void msw_read_both_fast(bool &a_low, bool &b_low) {
+  uint32_t e = MSW_A_GPIO->IDR;  // snapshot Port E (PE0..PE15)
+  uint32_t g = MSW_B_GPIO->IDR;  // snapshot Port G (PG0..PG15)
+  a_low = (e & (1u << MSW_A_BIT)) == 0;
+  b_low = (g & (1u << MSW_B_BIT)) == 0;
+}
 
 #endif // PIN_CONFIG_H
