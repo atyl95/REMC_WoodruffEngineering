@@ -31,11 +31,6 @@ using namespace std::chrono_literals;
 // 10 kHz
 constexpr uint32_t SAMPLE_INTERVAL_US = 100;
 
-// ---------- ISR-safe push ----------
-static inline void SharedRing_AddFromISR_Safe(const REMCSample &s) {
-  SharedRing_Add(s);
-}
-
 // ---------- Use ADC1 (adjust if you split across ADC3) ----------
 #define ADCx        ADC1
 #define ADCx_COMMON ADC12_COMMON
@@ -157,7 +152,7 @@ static void on_sample_tick() {
   decompose_us64(t_start, s.t_us,     s.rollover_count);
   decompose_us64(t_end,   s.t_us_end, s.rollover_count_end);
 
-  SharedRing_AddFromISR_Safe(s);
+  SharedRing_Add(s);
 }
 
 void setup() {
