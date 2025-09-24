@@ -359,17 +359,8 @@ void processIncoming() {
   }
 }
 
-static void processIncomingOccasionally() {
-  static uint32_t last = 0;
-  uint32_t nowu = micros();
-  if ((uint32_t)(nowu - last) < 2000) return;  // ~500 Hz
-  last = nowu;
-  processIncoming();
-}
-
 void update() {
-  // Legacy function - now just handles incoming commands
-  processIncomingOccasionally();  //cheaper than 10 kHz polling
+  processIncoming();
 }
 
 void sendNeutrinoPacket() {
