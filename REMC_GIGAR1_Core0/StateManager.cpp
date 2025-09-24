@@ -5,6 +5,11 @@
 #include "SampleCollector.h"
 #include <Arduino.h>
 
+// Snapshot of MSW switch status
+namespace {
+  StateManager::InputMswSnapshot g_inputs = {false, false, 0};
+}
+
 namespace {
   using SystemState = StateManager::SystemState;
 
@@ -132,6 +137,19 @@ void triggerSoftwareActuate() {
 }
 
 void update() {
+  // Read MSW pins (active LOW when pressed)
+  bool a_low, b_low;
+  msw_read_both_fast(a_low, b_low);
+
+  // Cache it so the same values are seen in this cycle
+  g_inputs.mswA_low = a_low;
+  g_inputs.mswB_low = b_low;
+  g_inputs.read_us  = micros();  // optional
+
+  // Mirror outputs from the same snapshot
+  digitalWrite(PIN_MSW_A_OUT, a_low ? HIGH : LOW);
+  digitalWrite(PIN_MSW_B_OUT, b_low ? HIGH : LOW);
+ 
   // If manual mode, do nothing in the FSM (the EM/actuator pins are managed elsewhere)
   if (isInManualMode) {
     digitalWrite(PIN_EM_ACT, emActOutputState ? HIGH : LOW);
@@ -141,10 +159,6 @@ void update() {
     }
     return;
   }
-
-  // Read MSW pins (active LOW when pressed)
-  bool mswA_low = (digitalRead(PIN_MSW_POS_A) == LOW);  //Top limit
-  bool mswB_low = (digitalRead(PIN_MSW_POS_B) == LOW);  //Bot limit
 
   // Remember when we entered this state if it just changed
   static SystemState lastState = currentState;
@@ -174,7 +188,7 @@ void update() {
     case SystemState::STATE_ARM_START_ENGAGE:
       // We have driven actuator forward with EM=ON; waiting for MSW_A
       //if (mswA_low) {
-      if (true) {
+      if (g_inputs.mswA_low) {
         ActuatorManager::run(ACT_STOP);
         Serial.println(F("StateManager: MSW_A triggered → ARM_PAUSE_BEFORE_PULLBACK"));
         currentState = SystemState::STATE_ARM_PAUSE_BEFORE_PULLBACK;
@@ -204,7 +218,7 @@ void update() {
     case SystemState::STATE_ARM_PULL_BACK:
       // We are driving backward, waiting for MSW_B to confirm "fully open"
       //if (mswB_low) {
-      if (true) {
+      if (g_inputs.mswB_low) {
         Serial.println(F("StateManager: MSW_B triggered → ARMED_READY"));
         currentState = SystemState::STATE_ARMED_READY;
         ActuatorManager::run(ACT_STOP);
@@ -224,7 +238,7 @@ void update() {
       // The EM is supposed to be holding the switch open (MSW_A_low == true)
       // (math: mswA_low==true means MSW_A is pressed → switch open & sitting on A)
       //if (!mswA_low) {
-      if (false) {
+      if (!g_inputs.mswA_low) {
         // MSW_A is no longer held closed, yet EM is still ON: "retain" failed
         errRetainFail = true;
         Serial.println(F("StateManager: ERROR → RETAIN_FAIL (bit2)"));
@@ -264,12 +278,12 @@ void update() {
     // ────────────────────────────────────────────────────────────────────────
     case SystemState::STATE_HOLD_AFTER_FIRE:
       // Actuator is holding after a fire event
-        if (mswA_low == false){
+        if (!g_inputs.mswA_low){
           holdAfterFireModeEMFireFlag = true;
           ActuatorManager::run(ACT_FWD);
          }
 
-        if (mswA_low && holdAfterFireModeEMFireFlag == true) {
+        if (g_inputs.mswA_low && holdAfterFireModeEMFireFlag == true) {
           ActuatorManager::run(ACT_STOP);
           Serial.println(F("StateManager: MSW_A triggered → IDLE"));
           currentState = SystemState::STATE_IDLE;
@@ -288,6 +302,7 @@ void update() {
   }
 }
 
+
 uint8_t getErrorFlags() {
   uint8_t bits = 0;
   if (errArmTimeout)      bits |= (1 << 0);
@@ -297,6 +312,11 @@ uint8_t getErrorFlags() {
 }
 
 // ─── The rest of your accessors ─────────────────────────────────────────────
+
+// MSW getter
+InputMswSnapshot getInputMswSnapshot() {
+  return g_inputs;
+}
 
 bool isReady()               { return !isInManualMode && currentState == SystemState::STATE_ARMED_READY; }
 bool isEmActActive()         { return emActOutputState; }
@@ -352,8 +372,9 @@ void manualEMDisable() {
 
 void manualActuatorControl(ActuatorMoveState cmd) { 
 
-  bool atA = (digitalRead(PIN_MSW_POS_A) == LOW);
-  bool atB = (digitalRead(PIN_MSW_POS_B) == LOW); 
+  auto in = StateManager::getInputMswSnapshot();
+  const bool atA = in.mswA_low;
+  const bool atB = in.mswB_low; 
 
   if (!isInManualMode) {
     Serial.println(F("StateManager: Manual Actuator IGNORED (not in Manual Mode)."));
@@ -364,7 +385,7 @@ void manualActuatorControl(ActuatorMoveState cmd) {
     return;
   } 
   if (cmd == ACT_FWD && atA) {
-    Serial.println(F("Manual FWD blocked: already at B endstop"));  //Top limit reached
+    Serial.println(F("Manual FWD blocked: already at A endstop"));  //Top limit reached
     return;
   }
   Serial.print(F("StateManager (Manual): "));

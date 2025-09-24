@@ -86,6 +86,7 @@ void loop() {
 
   // Update TimeMapper (handles automatic NTP re-sync every 10 seconds)
   TimeMapper::update();
+
 }
 
 // ===== DEBUG FUNCTIONS FROM M4 CORE =====
