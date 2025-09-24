@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Analyze timing jitter in large REMC telemetry data.
+Analyze sample frequency and timing jitter in REMC telemetry data.
 Optimized for large datasets with 300k+ samples.
 Expected sample interval: ~100 microseconds
 """
@@ -11,8 +11,8 @@ import matplotlib.pyplot as plt
 import time
 import sys
 
-def analyze_large_timing_jitter(csv_file):
-    """Analyze timing jitter in the sample_micros column for large datasets."""
+def analyze_sample_frequency(csv_file):
+    """Analyze sample frequency and timing jitter in the sample_timestamp_us column for large datasets."""
     
     print(f"Reading large CSV file: {csv_file}")
     print("This may take a moment for 300k+ samples...")
@@ -157,8 +157,8 @@ def analyze_large_timing_jitter(csv_file):
     plt.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('large_timing_analysis.png', dpi=150, bbox_inches='tight')
-    print(f"📊 Plot saved as 'large_timing_analysis.png'")
+    plt.savefig('sample_frequency_analysis.png', dpi=150, bbox_inches='tight')
+    print(f"📊 Plot saved as 'sample_frequency_analysis.png'")
     
     # Summary
     print(f"\n" + "="*80)
@@ -196,9 +196,9 @@ def analyze_large_timing_jitter(csv_file):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python analyze_large_timing_jitter.py <csv_file_path>")
-        print("Example: python analyze_large_timing_jitter.py '../csv dumps/run_2.csv'")
+        print("Usage: python analyze_sample_frequency.py <csv_file_path>")
+        print("Example: python analyze_sample_frequency.py '../remc_telemetry_log_20250923_144415.csv'")
         sys.exit(1)
     
     csv_file = sys.argv[1]
-    results = analyze_large_timing_jitter(csv_file)
+    results = analyze_sample_frequency(csv_file)

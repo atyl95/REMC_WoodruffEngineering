@@ -49,18 +49,19 @@ static const char* schema =
 
 // Dynamic bundling configuration - optimized for MTU
 // Ethernet MTU=1500, IP=20, UDP=8 → max payload=1472
-// Header=64, remaining=1408, sample=34 → max samples=41 (safe)
-constexpr size_t MAX_SAMPLES_PER_BUNDLE = 41;  // Maximum samples per UDP packet (MTU optimized)
+// Header=64, remaining=1408, sample=42 → max samples=33 (safe)
+constexpr size_t MAX_SAMPLES_PER_BUNDLE = 33;  // Maximum samples per UDP packet (MTU optimized for 42-byte samples)
 
 // Data sizes - variable samples per packet  
-static const size_t DATA_SIZE_PER_SAMPLE = (5 * sizeof(float)) + sizeof(uint64_t) + 6 * sizeof(uint8_t);  // 34 bytes per sample
+static const size_t DATA_SIZE_PER_SAMPLE = (5 * sizeof(float)) + sizeof(uint64_t) + 6 * sizeof(uint8_t) + sizeof(uint64_t);  // 42 bytes per sample (includes us_end)
 static const size_t MAX_PACKET_SIZE = HEADER_SIZE + (DATA_SIZE_PER_SAMPLE * MAX_SAMPLES_PER_BUNDLE);
-// Packet size check: 64 + (34 * 41) = 1458 bytes < 1472 MTU limit ✓
+// Packet size check: 64 + (42 * 33) = 1450 bytes < 1472 MTU limit ✓
 
 struct TelemetrySample {
   float sv, sc, ova, ovb, tm1;
   uint64_t us;  // NTP timestamp in microseconds (from TimeMapper)
   uint8_t ready, em, a, b, manual, hold;
+  uint64_t us_end;  // NTP timestamp in microseconds (from TimeMapper)
 };
 
 // ADC conversion constants (copied from old TimerManager)
@@ -236,7 +237,7 @@ bool addSample(const Sample& sample) {
   ts.ovb = convertOutputVoltageBKV(sample.outB);
   ts.tm1 = convertTemp1DegC(sample.t1);
   ts.us = TimeMapper::sampleToNTP(sample.t_us, sample.rollover_count);
-  
+  ts.us_end = TimeMapper::sampleToNTP(sample.t_us_end, sample.rollover_count_end);
   // Get these from state manager 
   ts.ready = StateManager::isReady() ? 1 : 0;
   ts.em = StateManager::isEmActActive() ? 1 : 0;
@@ -247,51 +248,6 @@ bool addSample(const Sample& sample) {
   
   s_bundle_count++;
   return true;
-}
-
-size_t addSamplesBulk(const Sample* samples, size_t count) {
-  // PERFORMANCE CRITICAL: Process samples in bulk, sending multiple packets as needed
-  size_t processed = 0;
-  
-  while (processed < count) {
-    // Calculate how many samples can fit in current bundle
-    size_t space_available = MAX_SAMPLES_PER_BUNDLE - s_bundle_count;
-    size_t to_process = min(count - processed, space_available);
-    
-    // Bulk convert and copy samples (much faster than individual calls)
-    for (size_t i = 0; i < to_process; i++) {
-      const Sample& sample = samples[processed + i];
-      TelemetrySample& ts = s_sample_bundle[s_bundle_count + i];
-      
-      // Optimized: avoid function call overhead for conversions
-      ts.sv = sample.swV * SCALE_VOLTAGE_KV + OFFSET_VOLTAGE_KV;
-      ts.sc = sample.swI * SCALE_SWITCH_CURRENT_A + OFFSET_SWITCH_CURRENT_A;
-      ts.ova = sample.outA * SCALE_OUTPUT_A_KV + OFFSET_OUTPUT_A_KV;
-      ts.ovb = sample.outB * SCALE_OUTPUT_B_KV + OFFSET_OUTPUT_B_KV;
-      ts.tm1 = sample.t1 * SCALE_TEMP_DEGC + OFFSET_TEMP_DEGC;
-      ts.us = sample.t_us;
-      
-      // Get these from state manager - optimized for bulk processing
-      uint8_t ready = StateManager::isReady() ? 1 : 0;
-      uint8_t em = StateManager::isEmActActive() ? 1 : 0;
-      uint8_t a = (digitalRead(PIN_MSW_POS_A) == LOW) ? 0 : 1;
-      uint8_t b = (digitalRead(PIN_MSW_POS_B) == LOW) ? 0 : 1;
-      uint8_t manual = StateManager::isManualModeActive() ? 1 : 0;
-      uint8_t hold = StateManager::isHoldAfterFireModeActive() ? 1 : 0;
-      
-      ts.ready = ready;  ts.em = em;  ts.a = a;  ts.b = b;  ts.manual = manual;  ts.hold = hold;
-    }
-    
-    s_bundle_count += to_process;
-    processed += to_process;
-    
-    // If bundle is full, send it immediately
-    if (s_bundle_count >= MAX_SAMPLES_PER_BUNDLE) {
-      flushSamples();  // This resets s_bundle_count to 0
-    }
-  }
-  
-  return processed;
 }
 
 void flushSamples() {
@@ -401,7 +357,7 @@ void sendNeutrinoPacket() {
     memcpy(d, &sample.sv, 20);
     d += 20;
     
-    // Copy uint64_t NTP timestamp
+    // Copy uint64_t NTP timestamp (start time)
     memcpy(d, &sample.us, sizeof(sample.us));
     d += sizeof(sample.us);
 
@@ -412,6 +368,10 @@ void sendNeutrinoPacket() {
     *d++ = sample.b;
     *d++ = sample.manual;
     *d++ = sample.hold;
+    
+    // Copy uint64_t NTP timestamp (end time)
+    memcpy(d, &sample.us_end, sizeof(sample.us_end));
+    d += sizeof(sample.us_end);
   }
 
   // PERFORMANCE: Remove error checking Serial.print calls to maximize speed

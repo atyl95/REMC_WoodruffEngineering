@@ -5,125 +5,177 @@
 #include "SharedRing.h"
 #include "Logger.h"
 #include "PinConfig.h"
-#include "HardwareTimer.h"
+#include "HardwareTimer.h"   // for getMicros64()
 
-using namespace std::chrono_literals;  // enables 100us, 10ms, etc.
+using namespace std::chrono_literals;
 
-// Fast AnalogIn handles (GIGA / ArduinoCore-mbed)
-static mbed::AnalogIn ain_switchCurrent((PinName)digitalPinToPinName(PIN_SWITCH_CURRENT));
-static mbed::AnalogIn ain_switchVoltage((PinName)digitalPinToPinName(PIN_SWITCH_VOLTAGE));
-static mbed::AnalogIn ain_outA((PinName)digitalPinToPinName(PIN_OUTPUT_VOLTAGE_A));
-static mbed::AnalogIn ain_outB((PinName)digitalPinToPinName(PIN_OUTPUT_VOLTAGE_B));
-static mbed::AnalogIn ain_temp1((PinName)digitalPinToPinName(PIN_TEMP_1));
+// ================== YOUR ADC CHANNEL IDs ==================
+// These are STM32 *ADC channel numbers* (SQx values), not Ax/Dx labels.
+#ifndef ADC_CHAN_SWITCH_CURRENT
+  #define ADC_CHAN_SWITCH_CURRENT    8   // A3 -> e.g. ADC1_IN8 (set to your map)
+#endif
+#ifndef ADC_CHAN_SWITCH_VOLTAGE
+  #define ADC_CHAN_SWITCH_VOLTAGE    3   // A6 -> e.g. ADC1_IN3
+#endif
+#ifndef ADC_CHAN_OUTPUT_VOLTAGE_A
+  #define ADC_CHAN_OUTPUT_VOLTAGE_A 11  // A4 -> e.g. ADC1_IN11
+#endif
+#ifndef ADC_CHAN_OUTPUT_VOLTAGE_B
+  #define ADC_CHAN_OUTPUT_VOLTAGE_B 12  // A5 -> e.g. ADC1_IN12
+#endif
+#ifndef ADC_CHAN_TEMP_1
+  #define ADC_CHAN_TEMP_1           10  // A2 -> e.g. ADC1_IN10
+#endif
+// ==========================================================
 
-volatile uint16_t g_switchCurrentRaw = 0;
-volatile uint16_t g_switchVoltageRaw = 0;
-volatile uint16_t g_outputVoltageARaw = 0;
-volatile uint16_t g_outputVoltageBRaw = 0;
-volatile uint16_t g_temp1Raw = 0;
-// Divider for slower temperature sampling
-const uint16_t TEMP_DIVIDER_THRESHOLD = 10000;
-uint16_t tempSampleCounter = TEMP_DIVIDER_THRESHOLD;
+// 10 kHz
+constexpr uint32_t SAMPLE_INTERVAL_US = 100;
 
-void push_sample(uint32_t atMicros) {
-  // Capture timestamp FIRST for maximum accuracy
-  uint32_t sample_time = atMicros;
-  uint32_t rollover_count = HardwareTimer::getRolloverCount();
-  
-  // Read all ADC inputs in sequence (minimize timing variation)
-  uint16_t swI_raw = ain_switchCurrent.read_u16() >> 4;
-  uint16_t swV_raw = ain_switchVoltage.read_u16() >> 4;
-  uint16_t outA_raw = ain_outA.read_u16() >> 4;
-  uint16_t outB_raw = ain_outB.read_u16() >> 4;
-  uint16_t temp_raw = ain_temp1.read_u16() >> 4;
-  // // Throttle temperature read (avoid conditional execution timing variation)
-  // uint16_t temp_raw = g_temp1Raw; // Use previous value by default
-  // tempSampleCounter++;
-  // if (tempSampleCounter >= TEMP_DIVIDER_THRESHOLD) {
-  //   g_temp1Raw = temp_raw = ain_temp1.read_u16() >> 4;
-  //   tempSampleCounter = 0;
-  // }
-  
-  // Build sample struct efficiently
-  Sample s;
-  s.swI = swI_raw;
-  s.swV = swV_raw;
-  s.outA = outA_raw;
-  s.outB = outB_raw;
-  s.t1 = temp_raw;
-  s.t_us = sample_time;
-  s.rollover_count = rollover_count;
-  
+// ---------- Use ADC1 (adjust if you split across ADC3) ----------
+#define ADCx        ADC1
+#define ADCx_COMMON ADC12_COMMON
+
+// mbed ticker -> IRQ every 100 µs
+static mbed::Ticker g_samplerTicker;
+
+// ---------- helpers ----------
+static inline void decompose_us64(uint64_t t64, uint32_t &t_us, uint32_t &roll) {
+  t_us  = (uint32_t)(t64 & 0xFFFFFFFFULL);
+  roll  = (uint32_t)(t64 >> 32);
+}
+
+static void adc_config_once() {
+  __HAL_RCC_ADC12_CLK_ENABLE();
+
+  // --- H7: regulator + power-up lives in ADCx->CR, not CCR ---
+  // Exit deep-power-down if present
+#ifdef ADC_CR_DEEPPWD
+  CLEAR_BIT(ADCx->CR, ADC_CR_DEEPPWD);
+#endif
+  // Enable the ADC internal voltage regulator (ADVREGEN)
+#ifdef ADC_CR_ADVREGEN_0
+  // Some headers expose _0/_1 fields
+  MODIFY_REG(ADCx->CR, ADC_CR_ADVREGEN, ADC_CR_ADVREGEN_0);
+#else
+  // Others expose a single mask
+  SET_BIT(ADCx->CR, ADC_CR_ADVREGEN);
+#endif
+  delayMicroseconds(20); // regulator startup
+
+  // make sure disabled before config
+  if (READ_BIT(ADCx->CR, ADC_CR_ADEN)) {
+    SET_BIT(ADCx->CR, ADC_CR_ADDIS);
+    while (READ_BIT(ADCx->CR, ADC_CR_ADEN)) {}
+  }
+
+  // single conversion, SW trigger
+  ADCx->CFGR = 0;
+
+  // sampling times — fast but safe default
+  const uint32_t SMP_47CYC = 0b101; // ~47.5 cycles
+  ADCx->SMPR1 =
+      (SMP_47CYC << ADC_SMPR1_SMP0_Pos) |
+      (SMP_47CYC << ADC_SMPR1_SMP1_Pos) |
+      (SMP_47CYC << ADC_SMPR1_SMP2_Pos) |
+      (SMP_47CYC << ADC_SMPR1_SMP3_Pos) |
+      (SMP_47CYC << ADC_SMPR1_SMP4_Pos) |
+      (SMP_47CYC << ADC_SMPR1_SMP5_Pos) |
+      (SMP_47CYC << ADC_SMPR1_SMP6_Pos) |
+      (SMP_47CYC << ADC_SMPR1_SMP7_Pos) |
+      (SMP_47CYC << ADC_SMPR1_SMP8_Pos) |
+      (SMP_47CYC << ADC_SMPR1_SMP9_Pos);
+
+  // if you use channels >9, set SMPR2 bits too
+  ADCx->SMPR2 =
+      (SMP_47CYC << ADC_SMPR2_SMP10_Pos) |
+      (SMP_47CYC << ADC_SMPR2_SMP11_Pos) |
+      (SMP_47CYC << ADC_SMPR2_SMP12_Pos) |
+      (SMP_47CYC << ADC_SMPR2_SMP13_Pos) |
+      (SMP_47CYC << ADC_SMPR2_SMP14_Pos) |
+      (SMP_47CYC << ADC_SMPR2_SMP15_Pos) |
+      (SMP_47CYC << ADC_SMPR2_SMP16_Pos) |
+      (SMP_47CYC << ADC_SMPR2_SMP17_Pos) |
+      (SMP_47CYC << ADC_SMPR2_SMP18_Pos) |
+      (SMP_47CYC << ADC_SMPR2_SMP19_Pos);
+
+  // sequence length = 5 (L=4), ranks 1..5
+  ADCx->SQR1 =
+      (4u << ADC_SQR1_L_Pos) |
+      (ADC_CHAN_SWITCH_CURRENT   << ADC_SQR1_SQ1_Pos) |  // rank1
+      (ADC_CHAN_SWITCH_VOLTAGE   << ADC_SQR1_SQ2_Pos) |  // rank2
+      (ADC_CHAN_OUTPUT_VOLTAGE_A << ADC_SQR1_SQ3_Pos) |  // rank3
+      (ADC_CHAN_OUTPUT_VOLTAGE_B << ADC_SQR1_SQ4_Pos);   // rank4
+  ADCx->SQR2 =
+      (ADC_CHAN_TEMP_1 << ADC_SQR2_SQ5_Pos);             // rank5
+
+  // calibrate & enable
+  SET_BIT(ADCx->CR, ADC_CR_ADCAL);
+  while (READ_BIT(ADCx->CR, ADC_CR_ADCAL)) {}
+  SET_BIT(ADCx->ISR, ADC_ISR_ADRDY);
+  SET_BIT(ADCx->CR, ADC_CR_ADEN);
+  while (!READ_BIT(ADCx->ISR, ADC_ISR_ADRDY)) {}
+}
+
+static inline void adc_start_sequence() {
+  // clear flags and start one scan
+  SET_BIT(ADCx->ISR, ADC_ISR_EOC | ADC_ISR_EOS | ADC_ISR_OVR);
+  SET_BIT(ADCx->CR,  ADC_CR_ADSTART);
+}
+
+static inline void adc_read_frame5(uint16_t out5[5]) {
+  // poll EOC for each rank; EOS at the end
+  for (int i = 0; i < 5; ++i) {
+    while (!READ_BIT(ADCx->ISR, ADC_ISR_EOC)) {}
+    out5[i] = (uint16_t)ADCx->DR; // DR read clears EOC
+  }
+  while (!READ_BIT(ADCx->ISR, ADC_ISR_EOS)) {}
+  SET_BIT(ADCx->ISR, ADC_ISR_EOS);
+}
+
+// ---------- ISR: every 100 µs ----------
+static void on_sample_tick() {
+  const uint64_t t_start = HardwareTimer::getMicros64();
+
+  uint16_t v[5];
+  adc_start_sequence();
+  adc_read_frame5(v);
+
+  const uint64_t t_end = HardwareTimer::getMicros64();
+
+  REMCSample s{};
+  s.swI  = v[0];
+  s.swV  = v[1];
+  s.outA = v[2];
+  s.outB = v[3];
+  s.t1   = v[4];
+
+  decompose_us64(t_start, s.t_us,     s.rollover_count);
+  decompose_us64(t_end,   s.t_us_end, s.rollover_count_end);
+
   SharedRing_Add(s);
 }
+
 void setup() {
-  
-  // LOGGER SETUP
 #ifdef CORE_CM7
-  // Code that should only run on Core 0 (Cortex-M7)
   Logger::init(0);
-  Logger::log("[Sampling Core] Logger debugging over serial connection");
+  Logger::log("[Sampling Core] Logger debugging over serial");
 #endif
 #ifdef CORE_CM4
   Logger::init(1);
   Logger::log("[Sampling Core] Logger debugging over RPC");
 #endif
 
-  // PIN SETUP
-  pinMode(PIN_SWITCH_CURRENT, INPUT);
-  pinMode(PIN_SWITCH_VOLTAGE, INPUT);
-  pinMode(PIN_TEMP_1, INPUT);
-  pinMode(PIN_OUTPUT_VOLTAGE_A, INPUT);
-  pinMode(PIN_OUTPUT_VOLTAGE_B, INPUT);
-
-  // SHARED RING BUFFER SETUP
   Logger::log("[Sampling Core] SharedRing Address");
   String addrStr = String("[Sampling Core] g_ring @ 0x") + String((uintptr_t)&g_ring, HEX);
   Logger::log(addrStr);
   SharedRing_Init();
 
-  // M4 doesn't need to call begin() - just use the timer
-  while (!HardwareTimer::isInitialized()) {
-    // Wait for M7 to initialize the timer
-    delay(1);
-  }
-  Logger::log("[Sampling Core] Hardware timer initialized successfully");
-  
+  adc_config_once();
+
+  g_samplerTicker.attach(mbed::callback(on_sample_tick), 100us);
+  Logger::log("[Sampling Core] mbed::Ticker sampling @ 10 kHz");
 }
 
-
-constexpr uint32_t SAMPLE_INTERVAL_US = 100;
-
-// Pre-calculated timing for better precision
-static uint32_t next_sample_time = 0;
-static bool first_sample = true;
-
-
-
 void loop() {
-
-  // Wait for precise timing at the start of loop (eliminates loop overhead)
-  uint32_t current_time;
-  while ((int32_t)((current_time = HardwareTimer::getMicros()) - next_sample_time) < 0) {
-    // Busy wait for precise timing
-    __asm volatile("nop");
-  }
-  
-  // Initialize timing on first sample
-  if (first_sample) {
-    next_sample_time = current_time + SAMPLE_INTERVAL_US;
-    first_sample = false;
-    return; // Skip first sample to establish timing baseline
-  }
-  
-  // Sample immediately when timing is met (no additional time checks)
-  push_sample(current_time);
-  
-  // Schedule next sample time (accumulative to prevent drift)
-  next_sample_time += SAMPLE_INTERVAL_US;
-  
-  // Handle case where we're running behind (skip missed samples)
-  if ((int32_t)(current_time - next_sample_time) > (int32_t)SAMPLE_INTERVAL_US) {
-    next_sample_time = current_time + SAMPLE_INTERVAL_US;
-  }
+  // ISR produces; main can drain or do nothing.
 }

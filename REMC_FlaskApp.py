@@ -92,12 +92,16 @@ def parse_neutrino_packet(datagram: bytes):
     if isinstance(header.get('schema_hash'), bytes):
         header['schema_hash'] = header['schema_hash'].hex()
 
-    # Decide sample size: try 34 (64-bit NTP), then 30 (32-bit micros), then 26 (legacy)
-    SAMPLE_SIZE_CURRENT = (5 * 4) + 8 + 6  # 34 bytes (5 floats + uint64 + 6 flags)
-    SAMPLE_SIZE_OLD = (5 * 4) + 4 + 6      # 30 bytes (5 floats + uint32 + 6 flags)
-    SAMPLE_SIZE_LEGACY = DATA_PAYLOAD_SIZE  # 26 bytes (5 floats + 6 flags)
+    # Decide sample size: try 42 (with us_end), 34 (64-bit NTP), then 30 (32-bit micros), then 26 (legacy)
+    SAMPLE_SIZE_WITH_END = (5 * 4) + 8 + 6 + 8  # 42 bytes (5 floats + uint64 us + 6 flags + uint64 us_end)
+    SAMPLE_SIZE_CURRENT = (5 * 4) + 8 + 6       # 34 bytes (5 floats + uint64 + 6 flags)
+    SAMPLE_SIZE_OLD = (5 * 4) + 4 + 6           # 30 bytes (5 floats + uint32 + 6 flags)
+    SAMPLE_SIZE_LEGACY = DATA_PAYLOAD_SIZE       # 26 bytes (5 floats + 6 flags)
     
-    if len(payload) % SAMPLE_SIZE_CURRENT == 0:
+    if len(payload) % SAMPLE_SIZE_WITH_END == 0:
+        sample_size = SAMPLE_SIZE_WITH_END
+        timestamp_format = 'ntp64_with_end'  # 64-bit NTP timestamp with end timestamp
+    elif len(payload) % SAMPLE_SIZE_CURRENT == 0:
         sample_size = SAMPLE_SIZE_CURRENT
         timestamp_format = 'ntp64'  # 64-bit NTP timestamp
     elif len(payload) % SAMPLE_SIZE_OLD == 0:
@@ -107,7 +111,7 @@ def parse_neutrino_packet(datagram: bytes):
         sample_size = SAMPLE_SIZE_LEGACY
         timestamp_format = 'none'  # No timestamp
     else:
-        raise ValueError(f'payload length {len(payload)} not multiple of 34, 30, or 26')
+        raise ValueError(f'payload length {len(payload)} not multiple of 42, 34, 30, or 26')
 
     n = len(payload) // sample_size
     samples = []
@@ -126,8 +130,17 @@ def parse_neutrino_packet(datagram: bytes):
         # Parse timestamp based on format
         sample_micros = None
         sample_timestamp_us = None
+        sample_timestamp_us_end = None
         
-        if timestamp_format == 'ntp64':
+        if timestamp_format == 'ntp64_with_end':
+            # 64-bit NTP timestamp in microseconds (little-endian)
+            (ntp_timestamp_us,) = struct.unpack_from('<Q', payload, offset)
+            offset += 8
+            sample_timestamp_us = ntp_timestamp_us
+            # For backward compatibility, extract just the microsecond portion
+            sample_micros = int(ntp_timestamp_us % 1_000_000)
+            
+        elif timestamp_format == 'ntp64':
             # 64-bit NTP timestamp in microseconds (little-endian)
             (ntp_timestamp_us,) = struct.unpack_from('<Q', payload, offset)
             offset += 8
@@ -150,6 +163,12 @@ def parse_neutrino_packet(datagram: bytes):
         # 6 single-byte flags
         ready, em, a, b, manual, hold = struct.unpack_from('<6B', payload, offset)
         offset += 6
+        
+        # Parse end timestamp if present (new format)
+        if timestamp_format == 'ntp64_with_end':
+            (ntp_timestamp_us_end,) = struct.unpack_from('<Q', payload, offset)
+            offset += 8
+            sample_timestamp_us_end = ntp_timestamp_us_end
 
         samples.append({
             'switch_voltage_kv': sv,
@@ -165,6 +184,7 @@ def parse_neutrino_packet(datagram: bytes):
             'hold_mode_status': hold,
             'sample_micros': sample_micros,
             'sample_timestamp_us': sample_timestamp_us,
+            'sample_timestamp_us_end': sample_timestamp_us_end,
         })
 
     return header, samples
@@ -188,6 +208,7 @@ historical_data_lock = threading.Lock()
 LOGGING_DATA_FIELDS = [
     'timestamp',            # float seconds since epoch, derived per sample
     'sample_timestamp_us',  # precise microseconds per sample (if present)
+    'sample_timestamp_us_end', # precise end microseconds per sample (if present)
     'sample_timestamp_iso', # human readable string
     'switch_voltage_kv',
     'switch_current_a',
@@ -234,7 +255,9 @@ def udp_listener_thread():
             if packet_count % 100 == 0:  # Every 100 packets
                 sample_size_str = ""
                 if samples:
-                    if 'sample_timestamp_us' in samples[0] and samples[0]['sample_timestamp_us'] is not None:
+                    if 'sample_timestamp_us_end' in samples[0] and samples[0]['sample_timestamp_us_end'] is not None:
+                        sample_size_str = " (64-bit NTP timestamps with end times)"
+                    elif 'sample_timestamp_us' in samples[0] and samples[0]['sample_timestamp_us'] is not None:
                         if samples[0]['sample_timestamp_us'] > 1e12:  # Likely NTP timestamp
                             sample_size_str = " (64-bit NTP timestamps)"
                         else:
@@ -259,6 +282,7 @@ def udp_listener_thread():
                         'sample_timestamp_iso': ts_iso,
                         'timestamp': ts_float,  # float seconds for UI/CSV
                         'sample_timestamp_us': s.get('sample_timestamp_us'),
+                        'sample_timestamp_us_end': s.get('sample_timestamp_us_end'),
                         'switch_voltage_kv': s.get('switch_voltage_kv'),
                         'switch_current_a': s.get('switch_current_a'),
                         'output_voltage_a_kv': s.get('output_voltage_a_kv'),

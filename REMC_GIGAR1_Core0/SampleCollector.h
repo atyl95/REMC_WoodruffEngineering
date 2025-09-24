@@ -8,7 +8,7 @@
 class SampleCollector {
 public:
     // Initialize the sample collector (call once in setup)
-    static bool init(size_t storageCapacity = 400000);
+    static bool init(size_t storageCapacity = 250000);
     
     // Main processing function (call in main loop)
     static void update();

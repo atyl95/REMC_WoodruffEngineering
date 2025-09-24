@@ -72,17 +72,6 @@ void SampleCollector::update() {
         if (gatheringActive && canSendNow()) {
             extractRequestedSamples();
         }
-        
-        // Show status occasionally
-        static uint32_t debug_counter = 0;
-        debug_counter++;
-        if (debug_counter % 20000 == 0) {
-            Serial.print("Overruns:");
-            Serial.print(g_ring.overruns);
-            Serial.print(" Received from M4:");
-            Serial.print(totalSamplesReceived);
-            Serial.println();
-        }
     }
 }
 
