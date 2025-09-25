@@ -1,4 +1,6 @@
 #include "NTPClient.h"
+#include "HardwareTimer.h"
+#include <math.h>
 
 static const uint32_t NTP_UNIX_EPOCH_DIFF = 2208988800UL; // seconds between 1900 and 1970
 static const int NTP_PACKET_SIZE = 48;
@@ -128,10 +130,6 @@ bool NTPClient::sendRequest() {
     return false;
   }
 
-  //Serial.print("[NTP] Sending NTP request to ");
-  //Serial.print(_serverIP);
-  //Serial.print(":");
-  //Serial.println(_serverPort);
 
   uint8_t packet[NTP_PACKET_SIZE];
   memset(packet, 0, sizeof(packet));
@@ -160,7 +158,9 @@ bool NTPClient::sendRequest() {
     return false;
   }
   
-  //Serial.println("[NTP] NTP request sent successfully");
+  // Capture timestamp as close as possible to packet transmission
+  _requestSentMicros = HardwareTimer::getMicros64();
+
   return true;
 }
 
@@ -176,10 +176,6 @@ bool NTPClient::readResponse(uint32_t& secs, uint32_t& frac) {
     Serial.println(")");
     return false;
   }
-
-  //Serial.print("[NTP] Received NTP response (");
-  //Serial.print(size);
-  //Serial.println(" bytes)");
 
   uint8_t buf[NTP_PACKET_SIZE];
   int bytesRead = _udp->read(buf, NTP_PACKET_SIZE);
@@ -211,10 +207,6 @@ bool NTPClient::readResponse(uint32_t& secs, uint32_t& frac) {
          ((uint32_t)buf[46] << 8)  |
          ((uint32_t)buf[47]);
 
-  //Serial.print("[NTP] Transmit timestamp: ");
-  //Serial.print(secs);
-  //Serial.print(".");
-  //Serial.println(frac);
 
   // Basic sanity: NTP time should be after Jan 1, 2000 (946684800 Unix)
   uint32_t unixSecs = secs - NTP_UNIX_EPOCH_DIFF;
@@ -224,7 +216,7 @@ bool NTPClient::readResponse(uint32_t& secs, uint32_t& frac) {
     return false;
   }
 
-  Serial.println("[NTP] Response validation successful");
+  //Serial.println("[NTP] Response validation successful");
   return true;
 }
 
@@ -234,10 +226,6 @@ bool NTPClient::syncInstance(uint16_t timeout_ms) {
     return false;
   }
 
-  //Serial.print("[NTP] Starting sync with timeout: ");
-  //Serial.print(timeout_ms);
-  //Serial.println("ms");
-
   // Flush any stale packets
   int flushed = 0;
   while (_udp->parsePacket() > 0) {
@@ -246,9 +234,6 @@ bool NTPClient::syncInstance(uint16_t timeout_ms) {
     flushed++;
   }
   if (flushed > 0) {
-    //Serial.print("[NTP] Flushed ");
-    //Serial.print(flushed);
-    //Serial.println(" stale packets");
   }
 
   if (!sendRequest()) {
@@ -260,51 +245,60 @@ bool NTPClient::syncInstance(uint16_t timeout_ms) {
   uint32_t start = millis();
   uint32_t lastCheck = start;
   
+  // Simple loop counting
+  int loopCount = 0;
+  uint64_t pollingStartTime = HardwareTimer::getMicros64();
+  
   while ((uint16_t)(millis() - start) < timeout_ms) {
     uint32_t secs = 0, frac = 0;
     if (readResponse(secs, frac)) {
-      // Capture local clock as close as possible to packet read
-      uint32_t localMicros = micros();
+      // Capture response timestamp as close as possible to packet read
+      uint64_t responseReceivedMicros = HardwareTimer::getMicros64();
 
+      // Calculate polling loop time (independent of RTT)
+      uint64_t totalPollingTime = responseReceivedMicros - pollingStartTime;
+      uint64_t rttMicros = responseReceivedMicros - _requestSentMicros;
+      
+      // Calculate average loop time from polling time only
+      if (loopCount > 0) {
+        uint32_t avgLoopTime = (uint32_t)(totalPollingTime / loopCount);
+        
+        Serial.print("[NTP] Polling: ");
+        Serial.print(loopCount);
+        Serial.print(" loops, total=");
+        Serial.print((unsigned long)totalPollingTime);
+        Serial.print("us, avg=");
+        Serial.print(avgLoopTime);
+        Serial.println("us/loop");
+      }
+      
+      // Convert NTP timestamp to Unix microseconds
       uint64_t unixSecs = (uint64_t)(secs - NTP_UNIX_EPOCH_DIFF);
       uint64_t unixFracUs = ntpFracToMicros(frac);
-      uint64_t unixUs = unixSecs * 1000000ULL + unixFracUs;
+      uint64_t ntpServerTime = unixSecs * 1000000ULL + unixFracUs;
+      
+      // Apply RTT/2 correction: server timestamp + half the round-trip delay
+      // This estimates when the server actually sent the packet
+      uint64_t correctedServerTime = ntpServerTime + (rttMicros / 2);
+      
+      // Use the corrected timestamp as our sync anchor
+      _epochUsAtSync = correctedServerTime;
+      _microsAtSync = responseReceivedMicros;
 
-      _epochUsAtSync = unixUs;    // this corresponds roughly to localMicros moment
-      _microsAtSync = localMicros;
+      Serial.print("[NTP] RTT: ");
+      Serial.print((unsigned long)rttMicros);
+      Serial.print("us, correction: +");
+      Serial.print((unsigned long)(rttMicros / 2));
+      Serial.println("us");
+
       _synced = true;
-      
-      Serial.println("[NTP] Sync successful");
-      //Serial.print("[NTP] NTP timestamp: ");
-      //Serial.print(secs);
-      //Serial.print(".");
-      //Serial.println(frac);
-
-      //Serial.print("[NTP] Unix time (s): ");
-      //Serial.println((unsigned long)(unixUs / 1000000ULL));
-      
-      //Serial.print("[NTP] Unix time (us): ");
-      //Serial.print((unsigned long)(unixUs / 1000000ULL));
-      //Serial.print("_");
-      //Serial.println((unsigned long)(unixUs % 1000000ULL));
-
-      //char buf[32];
-      //sprintf(buf, "%llu", (unsigned long long)unixUs);
-      //Serial.println(buf);
-
       return true;
     }
     
-    // Print progress every 1000ms
-    if (millis() - lastCheck >= 1000) {
-      Serial.print("[NTP] Still waiting... (");
-      Serial.print(millis() - start);
-      Serial.println("ms elapsed)");
-      lastCheck = millis();
-    }
+    // Just count loops
+    loopCount++;
     
-    // brief yield; small delay helps some MCUs
-    delay(10);  // Slightly longer delay for better responsiveness
+    yield(); 
   }
   
   Serial.print("[NTP] Sync timeout after ");
@@ -317,7 +311,7 @@ uint64_t NTPClient::nowMicrosInstance() const {
   if (!_synced) return 0ULL;
 
   // unsigned arithmetic handles wrap of micros()
-  uint32_t nowLocal = micros();
-  uint32_t elapsed = nowLocal - _microsAtSync; // wraps safely
-  return _epochUsAtSync + (uint64_t)elapsed;
+  uint64_t nowLocal = HardwareTimer::getMicros64();
+  uint64_t elapsed = nowLocal - _microsAtSync;
+  return _epochUsAtSync + elapsed;
 }

@@ -84,16 +84,16 @@ bool TimeMapper::syncNTPInstance(uint16_t timeout_ms) {
         return false;
     }
     
-    Serial.print("[TimeMapper] Syncing NTP with timeout: ");
-    Serial.print(timeout_ms);
-    Serial.println("ms");
+    //Serial.print("[TimeMapper] Syncing NTP with timeout: ");
+    //Serial.print(timeout_ms);
+    //Serial.println("ms");
     
     bool success = NTPClient::sync(timeout_ms);
     if (success) {
         updateMapping();
         _syncCount++;
         _lastAutoSyncMillis = millis();
-        Serial.println("[TimeMapper] NTP sync successful, mapping updated");
+        //Serial.println("[TimeMapper] NTP sync successful, mapping updated");
     } else {
         Serial.println("[TimeMapper] NTP sync failed");
     }
@@ -170,7 +170,7 @@ void TimeMapper::updateInstance() {
     // Check if we need to auto-sync
     uint32_t currentMillis = millis();
     if (currentMillis - _lastAutoSyncMillis >= AUTO_SYNC_INTERVAL_MS) {
-        Serial.println("[TimeMapper] Auto-sync triggered");
+        //Serial.println("[TimeMapper] Auto-sync triggered");
         syncNTPInstance();
     }
 }

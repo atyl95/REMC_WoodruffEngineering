@@ -38,7 +38,7 @@ public:
 
   // Returns the offset (us) between device's micros() clock and Unix epoch at the last sync.
   // I.e., epoch_us_at_sync - micros_at_sync.
-  uint64_t baseOffsetUsInstance() const { return _epochUsAtSync - (uint64_t)_microsAtSync; }
+  uint64_t baseOffsetUsInstance() const { return _epochUsAtSync - _microsAtSync; }
 
   // When was the last successful sync (Unix us)? 0 if never.
   uint64_t lastSyncUnixUsInstance() const { return _epochUsAtSync; }
@@ -80,5 +80,6 @@ private:
   // Sync anchors
   bool _synced = false;
   uint64_t _epochUsAtSync = 0;  // Unix epoch microseconds at the moment we captured micros()
-  uint32_t _microsAtSync = 0;   // micros() snapshot at sync
+  uint64_t _microsAtSync = 0;   // micros() snapshot at sync
+  uint64_t _requestSentMicros = 0; // timestamp when NTP request was sent
 };
