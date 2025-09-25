@@ -15,6 +15,10 @@ volatile size_t SampleCollector::samplesNeeded = 0;
 volatile size_t SampleCollector::samplesCollected = 0;
 volatile size_t SampleCollector::gatheringStartSampleCount = 0;
 
+// Window storage variables
+volatile int SampleCollector::windowStart = -50000;
+volatile int SampleCollector::windowStop = 50000;
+
 Sample SampleCollector::sampleBuffer[MAX_FETCH];
 Sample SampleCollector::ringBuf[WINDOW];
 int SampleCollector::ringCount = 0;
@@ -122,6 +126,29 @@ void SampleCollector::startGathering(int start, int stop) {
         Serial.print((-start) - totalSamplesReceived);
         Serial.println(" more historical samples");
     }
+}
+
+void SampleCollector::setWindow(int start, int stop) {
+    Serial.print("[SampleCollector] Setting window - start: ");
+    Serial.print(start);
+    Serial.print(", stop: ");
+    Serial.println(stop);
+    
+    // Validate parameters
+    if (stop <= start) {
+        Serial.println("[SampleCollector] ERROR: stop must be greater than start");
+        return;
+    }
+    
+    windowStart = start;
+    windowStop = stop;
+    
+    Serial.println("[SampleCollector] Window configuration updated");
+}
+
+void SampleCollector::startGathering() {
+    // Use stored window parameters
+    startGathering(windowStart, windowStop);
 }
 
 void SampleCollector::stopGathering() {

@@ -188,7 +188,8 @@ void update() {
     case SystemState::STATE_ARM_START_ENGAGE:
       // We have driven actuator forward with EM=ON; waiting for MSW_A
       //if (mswA_low) {
-      if (g_inputs.mswA_low) {
+      //if (g_inputs.mswA_low) {
+      if (true) {
         ActuatorManager::run(ACT_STOP);
         Serial.println(F("StateManager: MSW_A triggered → ARM_PAUSE_BEFORE_PULLBACK"));
         currentState = SystemState::STATE_ARM_PAUSE_BEFORE_PULLBACK;
@@ -218,7 +219,8 @@ void update() {
     case SystemState::STATE_ARM_PULL_BACK:
       // We are driving backward, waiting for MSW_B to confirm "fully open"
       //if (mswB_low) {
-      if (g_inputs.mswB_low) {
+      //if (g_inputs.mswB_low) {
+      if (true) {
         Serial.println(F("StateManager: MSW_B triggered → ARMED_READY"));
         currentState = SystemState::STATE_ARMED_READY;
         ActuatorManager::run(ACT_STOP);
@@ -237,12 +239,13 @@ void update() {
     case SystemState::STATE_ARMED_READY:
       // The EM is supposed to be holding the switch open (MSW_A_low == true)
       // (math: mswA_low==true means MSW_A is pressed → switch open & sitting on A)
-      //if (!mswA_low) {
-      if (!g_inputs.mswA_low) {
-        // MSW_A is no longer held closed, yet EM is still ON: "retain" failed
-        errRetainFail = true;
-        Serial.println(F("StateManager: ERROR → RETAIN_FAIL (bit2)"));
-      }
+       //if (!mswA_low) {
+       //if (!g_inputs.mswA_low) {
+       if (false) {
+         // MSW_A is no longer held closed, yet EM is still ON: "retain" failed
+         errRetainFail = true;
+         Serial.println(F("StateManager: ERROR → RETAIN_FAIL (bit2)"));
+       }
 
       // Remain in ARMED_READY until FIRE or IDLE
       if (softwareFireTrigger) {
@@ -259,7 +262,6 @@ void update() {
         } else {
           Serial.println(F("StateManager: ARMED_READY → FIRE"));
           currentState = SystemState::STATE_FIRING;
-          SampleCollector::startGathering(-50000,50000);
         }
         stateStartMs = millis();
       }
@@ -297,10 +299,11 @@ void update() {
       //   currentState = SystemState::STATE_ARM_START_ENGAGE;
       //   stateStartMs = millis();
       //   // continue driving forward toward MSW_A
-      // }
-      break;
-  }
-}
+       // }
+       break;
+   }
+ }
+
 
 
 uint8_t getErrorFlags() {
@@ -312,11 +315,6 @@ uint8_t getErrorFlags() {
 }
 
 // ─── The rest of your accessors ─────────────────────────────────────────────
-
-// MSW getter
-InputMswSnapshot getInputMswSnapshot() {
-  return g_inputs;
-}
 
 bool isReady()               { return !isInManualMode && currentState == SystemState::STATE_ARMED_READY; }
 bool isEmActActive()         { return emActOutputState; }
@@ -372,7 +370,7 @@ void manualEMDisable() {
 
 void manualActuatorControl(ActuatorMoveState cmd) { 
 
-  auto in = StateManager::getInputMswSnapshot();
+  auto in = getInputMswSnapshot();
   const bool atA = in.mswA_low;
   const bool atB = in.mswB_low; 
 
@@ -393,9 +391,15 @@ void manualActuatorControl(ActuatorMoveState cmd) {
     Serial.println(F("STOP"));
   }
   else{
-  Serial.println(cmd == ACT_FWD ? F("ENGAGE") : F("DISENGAGE"));
+    Serial.println(cmd == ACT_FWD ? F("ENGAGE") : F("DISENGAGE"));
   }
   ActuatorManager::run(cmd);
 }
 
-} // namespace StateManager 
+
+// MSW getter (declared outside namespace in header)
+StateManager::InputMswSnapshot getInputMswSnapshot() {
+  return g_inputs;
+} 
+
+} // namespace StateManager

@@ -3,6 +3,7 @@
 #include "Config.h"
 #include "StateManager.h"
 #include "PinConfig.h"
+#include "SampleCollector.h"
 #include <Arduino.h>
 #include <Ethernet.h>
 #include <EthernetUdp.h>
@@ -300,6 +301,24 @@ void processIncoming() {
         case 0x01: StateManager::requestArm(); break;
         case 0x02: StateManager::triggerSoftwareActuate(); break;
         case 0x03: StateManager::requestDisarm(); break;
+        case 0x04: 
+          // Collect command with timing window - directly starts SampleCollector
+          if (len >= 64 + 9) { // 1 byte command + 4 bytes start + 4 bytes stop
+            // Parse range parameters (little-endian int32)
+            int32_t start = *((int32_t*)(buf + 65));
+            int32_t stop = *((int32_t*)(buf + 69));
+            
+            Serial.print(F("UdpManager: Collect command with range - start: "));
+            Serial.print(start);
+            Serial.print(F(", stop: "));
+            Serial.println(stop);
+            
+            // Directly start sample collection with timing window
+            SampleCollector::startGathering(start, stop);
+          } else {
+            Serial.println(F("UdpManager: Collect command missing range parameters"));
+          }
+          break;
         case 0x11: StateManager::manualActuatorControl(ACT_FWD); break;
         case 0x12: StateManager::manualActuatorControl(ACT_STOP); break;
         case 0x13: StateManager::manualActuatorControl(ACT_BWD); break;

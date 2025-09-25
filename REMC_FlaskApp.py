@@ -7,7 +7,7 @@ import copy
 import io  # for CSV
 import csv  # for CSV
 from datetime import datetime
-from flask import Flask, redirect, url_for, jsonify, Response
+from flask import Flask, redirect, url_for, jsonify, Response, request
 from collections import deque
 
 # Attempt to use Waitress for a production WSGI server
@@ -529,6 +529,8 @@ def get_javascript_html():
     <script>
       const POLLING_INTERVAL_MS = 500;
       let manualMode = false;
+      let currentSampleStart = -50000;
+      let currentSampleStop = 50000;
 
       async function sendCommand(endpoint) {
         try {
@@ -570,6 +572,7 @@ def get_javascript_html():
         }
         if (fireBtn) {
           fireBtn.addEventListener('click', () => {
+            // Simple fire command - no timing window
             sendCommand('/trigger_fire');
             if (armBtn) armBtn.disabled = false;
           });
@@ -603,10 +606,57 @@ def get_javascript_html():
           dis.addEventListener('touchend',   e => { e.preventDefault(); sendCommand('/manual_actuator_stop'); });
         }
 
+        // wire sample range update button
+        const updateRangeBtn = document.getElementById('update-range-button');
+        if (updateRangeBtn) {
+          updateRangeBtn.addEventListener('click', () => {
+            const startInput = document.getElementById('sample-start');
+            const stopInput = document.getElementById('sample-stop');
+            if (startInput && stopInput) {
+              const start = parseInt(startInput.value);
+              const stop = parseInt(stopInput.value);
+              if (!isNaN(start) && !isNaN(stop) && stop > start) {
+                currentSampleStart = start;
+                currentSampleStop = stop;
+                document.getElementById('current-range-display').innerText = `${start} to ${stop}`;
+                console.log(`Sample range updated: ${start} to ${stop}`);
+              } else {
+                alert('Invalid range: Stop must be greater than Start, and both must be valid numbers.');
+              }
+            }
+          });
+        }
+
+        // wire collect button
+        const collectBtn = document.getElementById('collect-button');
+        if (collectBtn) {
+          collectBtn.addEventListener('click', () => {
+            sendCollectCommand();
+          });
+        }
+
         // start polling
         fetchDataAndUpdate();
         setInterval(fetchDataAndUpdate, POLLING_INTERVAL_MS);
       });
+
+      async function sendCollectCommand() {
+        try {
+          const res = await fetch('/trigger_collect', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              sample_start: currentSampleStart,
+              sample_stop: currentSampleStop
+            })
+          });
+          if (!res.ok) console.error('POST /trigger_collect →', res.status);
+        } catch (err) {
+          console.error('Error sending collect command', err);
+        }
+      }
 
       async function fetchDataAndUpdate() {
         try {
@@ -933,6 +983,30 @@ def index_page():
               <button type="submit" class="button download">Download Logged Data (CSV)</button>
             </form>
           </div>
+          
+          <h3>Sample Collection Range</h3>
+          <div class="button-group">
+            <form id="sample-range-form" style="display:inline-block; margin: 10px 0;">
+              <label for="sample-start" style="margin-right: 10px;">Start Sample:</label>
+              <input type="number" id="sample-start" name="sample_start" value="-50000" 
+                     style="width: 100px; padding: 5px; margin-right: 15px;">
+              
+              <label for="sample-stop" style="margin-right: 10px;">Stop Sample:</label>
+              <input type="number" id="sample-stop" name="sample_stop" value="50000" 
+                     style="width: 100px; padding: 5px; margin-right: 15px;">
+              
+              <button type="button" id="update-range-button" class="action">Update Range</button>
+            </form>
+            <p style="font-size: 12px; color: #666; margin: 5px 0;">
+              Current range: <span id="current-range-display">-50000 to 50000</span>
+            </p>
+            <div style="margin-top: 15px;">
+              <button type="button" id="collect-button" class="button download">COLLECT Samples</button>
+              <p style="font-size: 12px; color: #666; margin: 5px 0;">
+                Collects samples using the current range without firing the actuator
+              </p>
+            </div>
+          </div>
 
           <div class="section">
             <h2>System Status</h2>
@@ -1003,6 +1077,38 @@ def send_udp_command(command_byte):
         print(f"An unexpected error occurred in send_udp_command: {e}")
 
 
+def send_collect_command_with_range(sample_start, sample_stop):
+    """Send collect command with sample range parameters"""
+    try:
+        with socket.socket(socket.AF_INET,
+                           socket.SOCK_DGRAM,
+                           socket.IPPROTO_UDP) as cmd_sock:
+            cmd_sock.setsockopt(socket.SOL_SOCKET,
+                                socket.SO_REUSEADDR, 1)
+            cmd_sock.bind((MULTICAST_INTERFACE_IP, 0))
+            cmd_sock.setsockopt(socket.IPPROTO_IP,
+                                socket.IP_MULTICAST_IF,
+                                socket.inet_aton(MULTICAST_INTERFACE_IP))
+            cmd_sock.setsockopt(socket.IPPROTO_IP,
+                                socket.IP_MULTICAST_TTL, 2)
+            cmd_sock.setsockopt(socket.IPPROTO_IP,
+                                socket.IP_MULTICAST_LOOP, 1)
+
+            # Create packet: 64-byte header + collect command + range parameters
+            # Command format: 0x04 (collect) + 4 bytes start (int32) + 4 bytes stop (int32)
+            command_payload = struct.pack('<Bii', 0x04, sample_start, sample_stop)
+            packet = b'\x00' * HEADER_SIZE + command_payload
+            
+            cmd_sock.sendto(packet, (MULTICAST_GROUP_CMND, PORT_CMND))
+            print(f"Sent collect command with range {sample_start} to {sample_stop} "
+                  f"to {MULTICAST_GROUP_CMND}:{PORT_CMND}")
+
+    except socket.error as e:
+        print(f"Socket error sending collect command with range: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred in send_collect_command_with_range: {e}")
+
+
 # --- Flask Command Routes ---
 @app.route('/trigger_arm', methods=['POST'])
 def handle_trigger_arm():
@@ -1018,8 +1124,49 @@ def handle_trigger_disarm():
 
 @app.route('/trigger_fire', methods=['POST'])
 def handle_trigger_fire():
-    send_udp_command(b'\x02')
-    return redirect(url_for('index_page'))
+    """Simple fire command - no timing window"""
+    try:
+        send_udp_command(b'\x02')
+        if request.is_json:
+            return jsonify(status="fire_command_sent")
+        else:
+            return redirect(url_for('index_page'))
+    except Exception as e:
+        print(f"Error in handle_trigger_fire: {e}")
+        if request.is_json:
+            return jsonify(error=str(e)), 500
+        else:
+            return redirect(url_for('index_page'))
+
+
+@app.route('/trigger_collect', methods=['POST'])
+def handle_trigger_collect():
+    """Collect samples with timing window - bypasses StateManager"""
+    try:
+        if request.is_json:
+            data = request.get_json()
+            sample_start = data.get('sample_start', -50000)
+            sample_stop = data.get('sample_stop', 50000)
+            
+            # Validate range
+            if sample_stop <= sample_start:
+                return jsonify(error="Stop must be greater than Start"), 400
+                
+            # Send collect command with range parameters
+            send_collect_command_with_range(sample_start, sample_stop)
+            return jsonify(status="collect_command_sent", 
+                         sample_start=sample_start, 
+                         sample_stop=sample_stop)
+        else:
+            # Fallback for form-based requests (use default range)
+            send_collect_command_with_range(-50000, 50000)
+            return redirect(url_for('index_page'))
+    except Exception as e:
+        print(f"Error in handle_trigger_collect: {e}")
+        if request.is_json:
+            return jsonify(error=str(e)), 500
+        else:
+            return redirect(url_for('index_page'))
 
 
 @app.route('/set_switch', methods=['POST'])

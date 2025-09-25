@@ -15,8 +15,12 @@ public:
     
     // Control functions
     static void startGathering(int start, int stop);
+    static void startGathering(); // Parameterless version using stored window
     static void stopGathering();
     static void sendAllSamples();
+    
+    // Window configuration functions
+    static void setWindow(int start, int stop);
     
     // Status functions
     static size_t getSamplesStored();
@@ -40,6 +44,10 @@ private:
     static volatile size_t samplesNeeded;
     static volatile size_t samplesCollected;
     static volatile size_t gatheringStartSampleCount;
+    
+    // Window storage
+    static volatile int windowStart;
+    static volatile int windowStop;
     
     // Processing buffer
     static constexpr int MAX_FETCH = 1024;
