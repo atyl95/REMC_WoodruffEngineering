@@ -96,10 +96,74 @@ void SampleCollector::startGathering(int start, int stop) {
     Serial.print(", stop: ");
     Serial.println(stop);
     
-    // Validate parameters
+    // Validate basic parameters
     if (stop <= start) {
         Serial.println("[SampleCollector] ERROR: stop must be greater than start");
         return;
+    }
+    
+    // Store original request for logging
+    int originalStart = start;
+    int originalStop = stop;
+    
+    // Adjust historical samples if requesting more than available
+    if (start < 0) {
+        size_t historicalRequested = (size_t)(-start);
+        // Match the logic in getRingIndex: when buffer has wrapped, we can only go back ringCapacity samples
+        size_t maxHistoricalTheoretical = totalSamplesReceived >= ringCapacity ? ringCapacity : totalSamplesReceived;
+        
+        // Add a small safety buffer to account for samples that might arrive between now and extraction
+        // Use 1% of ring capacity or 100 samples, whichever is smaller, but don't exceed 10% of available samples
+        size_t safetyMargin = min((size_t)100, ringCapacity / 100);
+        safetyMargin = min(safetyMargin, maxHistoricalTheoretical / 10);
+        size_t maxHistoricalAvailable = maxHistoricalTheoretical > safetyMargin ? 
+                                        maxHistoricalTheoretical - safetyMargin : 0;
+        
+        if (historicalRequested > maxHistoricalAvailable) {
+            int adjustedStart = -(int)maxHistoricalAvailable;
+            Serial.print("[SampleCollector] ADJUSTED: Requested ");
+            Serial.print(historicalRequested);
+            Serial.print(" historical samples, but only ");
+            Serial.print(maxHistoricalAvailable);
+            Serial.print(" safely available (");
+            Serial.print(maxHistoricalTheoretical);
+            Serial.print(" theoretical - ");
+            Serial.print(safetyMargin);
+            Serial.print(" safety margin). Adjusting start from ");
+            Serial.print(start);
+            Serial.print(" to ");
+            Serial.println(adjustedStart);
+            start = adjustedStart;
+        }
+    }
+    
+    // Adjust range if it exceeds ring buffer capacity
+    size_t requestedRange = (size_t)(stop - start);
+    if (requestedRange > ringCapacity) {
+        // Limit the range to ring capacity, prioritizing the start point
+        int adjustedStop = start + (int)ringCapacity;
+        Serial.print("[SampleCollector] ADJUSTED: Requested range (");
+        Serial.print(requestedRange);
+        Serial.print(" samples) exceeds ring buffer capacity (");
+        Serial.print(ringCapacity);
+        Serial.print(" samples). Adjusting stop from ");
+        Serial.print(stop);
+        Serial.print(" to ");
+        Serial.println(adjustedStop);
+        stop = adjustedStop;
+    }
+    
+    // Log final parameters if they were adjusted
+    if (start != originalStart || stop != originalStop) {
+        Serial.print("[SampleCollector] FINAL: Gathering adjusted to start: ");
+        Serial.print(start);
+        Serial.print(", stop: ");
+        Serial.print(stop);
+        Serial.print(" (");
+        Serial.print(stop - start);
+        Serial.print(" samples vs ");
+        Serial.print(originalStop - originalStart);
+        Serial.println(" originally requested)");
     }
     
     // Store gathering parameters
@@ -134,11 +198,47 @@ void SampleCollector::setWindow(int start, int stop) {
     Serial.print(", stop: ");
     Serial.println(stop);
     
-    // Validate parameters
+    // Validate basic parameters
     if (stop <= start) {
         Serial.println("[SampleCollector] ERROR: stop must be greater than start");
         return;
     }
+    
+    // Store original request for logging
+    int originalStart = start;
+    int originalStop = stop;
+    
+    // Adjust range if it exceeds ring buffer capacity
+    size_t requestedRange = (size_t)(stop - start);
+    if (requestedRange > ringCapacity) {
+        // Limit the range to ring capacity, prioritizing the start point
+        int adjustedStop = start + (int)ringCapacity;
+        Serial.print("[SampleCollector] ADJUSTED: Window range (");
+        Serial.print(requestedRange);
+        Serial.print(" samples) exceeds ring buffer capacity (");
+        Serial.print(ringCapacity);
+        Serial.print(" samples). Adjusting stop from ");
+        Serial.print(stop);
+        Serial.print(" to ");
+        Serial.println(adjustedStop);
+        stop = adjustedStop;
+    }
+    
+    // Log final parameters if they were adjusted
+    if (start != originalStart || stop != originalStop) {
+        Serial.print("[SampleCollector] FINAL: Window adjusted to start: ");
+        Serial.print(start);
+        Serial.print(", stop: ");
+        Serial.print(stop);
+        Serial.print(" (");
+        Serial.print(stop - start);
+        Serial.print(" samples vs ");
+        Serial.print(originalStop - originalStart);
+        Serial.println(" originally requested)");
+    }
+    
+    // Note: Historical samples will be validated when startGathering() is called
+    // since we don't know the current buffer state when setting the window
     
     windowStart = start;
     windowStop = stop;
@@ -234,6 +334,17 @@ size_t SampleCollector::getRingIndex(int relativeIndex, size_t referenceSampleCo
 
 void SampleCollector::extractRequestedSamples() {
     Serial.println("[SampleCollector] Extracting requested samples...");
+    
+    // Debug: Check if totalSamplesReceived changed since gathering started
+    if (totalSamplesReceived != gatheringStartSampleCount) {
+        Serial.print("[SampleCollector] DEBUG: totalSamplesReceived changed from ");
+        Serial.print(gatheringStartSampleCount);
+        Serial.print(" to ");
+        Serial.print(totalSamplesReceived);
+        Serial.print(" (delta: ");
+        Serial.print(totalSamplesReceived - gatheringStartSampleCount);
+        Serial.println(")");
+    }
     
     // Tag all outgoing samples as collected samples
     UdpManager::startSendingCollectedSamples();
