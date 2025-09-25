@@ -205,6 +205,18 @@ data_lock = threading.Lock()
 
 historical_data_log = deque(maxlen=MAX_RECORDS_IN_RAM)
 historical_data_lock = threading.Lock()
+
+# --- Batch Collection Storage ---
+collection_batches = {}  # Dictionary: batch_id -> batch_data
+batches_lock = threading.Lock()
+next_batch_id = 1
+
+# --- Batch Capture State ---
+batch_capture_active = False
+current_batch_id = None
+current_batch_samples = []
+batch_capture_start_time = None
+
 LOGGING_DATA_FIELDS = [
     'timestamp',            # float seconds since epoch, derived per sample
     'sample_timestamp_us',  # precise microseconds per sample (if present)
@@ -220,6 +232,7 @@ LOGGING_DATA_FIELDS = [
 
 # --- UDP Listener Thread ---
 def udp_listener_thread():
+    global batch_capture_active, current_batch_id, current_batch_samples, batch_capture_start_time
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -266,7 +279,7 @@ def udp_listener_thread():
                         sample_size_str = " (no timestamps)"
                 print(f"[UDP] Packet {packet_count}: Bundle of {len(samples)} samples ({len(data)} bytes){sample_size_str}")
 
-            # Log every sample with per-sample timestamp if available
+            # Process samples for both historical logging and batch capture
             with historical_data_lock:
                 for s in samples:
                     if s.get('sample_timestamp_us') is not None:
@@ -277,8 +290,7 @@ def udp_listener_thread():
                         ts_float = time.time()                       # fallback if running legacy 26B samples
                         ts_iso = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(ts_float)) + 'Z'
 
-
-                    historical_data_log.append({
+                    sample_record = {
                         'sample_timestamp_iso': ts_iso,
                         'timestamp': ts_float,  # float seconds for UI/CSV
                         'sample_timestamp_us': s.get('sample_timestamp_us'),
@@ -288,10 +300,49 @@ def udp_listener_thread():
                         'output_voltage_a_kv': s.get('output_voltage_a_kv'),
                         'output_voltage_b_kv': s.get('output_voltage_b_kv'),
                         'temperature_1_degc': s.get('temperature_1_degc'),
-                    })
+                    }
 
-            # Keep last sample for UI compatibility
-            payload = samples[-1]
+                    # Add to continuous historical log
+                    historical_data_log.append(sample_record)
+
+            # Check if we're in batch capture mode
+            with batches_lock:
+                if batch_capture_active and current_batch_id is not None:
+                    flags = header.get('flags', 0)
+                    
+                    if flags == 2:  # Batch end marker
+                        print(f"[BATCH] Received batch end marker for batch {current_batch_id}")
+                        finalize_current_batch()
+                    elif flags == 1:  # Collected samples
+                        # Only capture samples with flags=1 (collected samples)
+                        for s in samples:
+                            if s.get('sample_timestamp_us') is not None:
+                                ts_float = s['sample_timestamp_us'] / 1e6
+                                ts_iso = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(ts_float)) \
+                                         + f'.{int(s["sample_timestamp_us"] % 1_000_000):06d}Z'
+                            else:
+                                ts_float = time.time()
+                                ts_iso = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(ts_float)) + 'Z'
+
+                            current_batch_samples.append({
+                                'sample_timestamp_iso': ts_iso,
+                                'timestamp': ts_float,
+                                'sample_timestamp_us': s.get('sample_timestamp_us'),
+                                'sample_timestamp_us_end': s.get('sample_timestamp_us_end'),
+                                'switch_voltage_kv': s.get('switch_voltage_kv'),
+                                'switch_current_a': s.get('switch_current_a'),
+                                'output_voltage_a_kv': s.get('output_voltage_a_kv'),
+                                'output_voltage_b_kv': s.get('output_voltage_b_kv'),
+                                'temperature_1_degc': s.get('temperature_1_degc'),
+                            })
+
+
+            # Keep last sample for UI compatibility (if samples exist)
+            if samples:
+                payload = samples[-1]
+            else:
+                # Empty samples (e.g., batch end marker), use a dummy payload
+                payload = {}
 
             # Convert header fields removed here because already done in parser
             frag = header.get('schema_frag')
@@ -319,6 +370,27 @@ def udp_listener_thread():
             with data_lock:
                 latest_data['status'] = f"Listener Error: {e}"
             time.sleep(1)
+
+
+# --- Batch Completion Check Thread ---
+def finalize_current_batch():
+    """Finalize the current batch"""
+    global batch_capture_active, current_batch_id, current_batch_samples, batch_capture_start_time
+    
+    if current_batch_samples:
+        collection_batches[current_batch_id] = {
+            'id': current_batch_id,
+            'timestamp': batch_capture_start_time,
+            'sample_count': len(current_batch_samples),
+            'samples': current_batch_samples.copy()
+        }
+        print(f"[BATCH] Batch {current_batch_id} completed with {len(current_batch_samples)} samples")
+    
+    # Reset batch capture state
+    batch_capture_active = False
+    current_batch_id = None
+    current_batch_samples.clear()
+    batch_capture_start_time = None
 
 
 # --- Data Logging Thread ---
@@ -529,8 +601,6 @@ def get_javascript_html():
     <script>
       const POLLING_INTERVAL_MS = 500;
       let manualMode = false;
-      let currentSampleStart = -50000;
-      let currentSampleStop = 50000;
 
       async function sendCommand(endpoint) {
         try {
@@ -606,27 +676,6 @@ def get_javascript_html():
           dis.addEventListener('touchend',   e => { e.preventDefault(); sendCommand('/manual_actuator_stop'); });
         }
 
-        // wire sample range update button
-        const updateRangeBtn = document.getElementById('update-range-button');
-        if (updateRangeBtn) {
-          updateRangeBtn.addEventListener('click', () => {
-            const startInput = document.getElementById('sample-start');
-            const stopInput = document.getElementById('sample-stop');
-            if (startInput && stopInput) {
-              const start = parseInt(startInput.value);
-              const stop = parseInt(stopInput.value);
-              if (!isNaN(start) && !isNaN(stop) && stop > start) {
-                currentSampleStart = start;
-                currentSampleStop = stop;
-                document.getElementById('current-range-display').innerText = `${start} to ${stop}`;
-                console.log(`Sample range updated: ${start} to ${stop}`);
-              } else {
-                alert('Invalid range: Stop must be greater than Start, and both must be valid numbers.');
-              }
-            }
-          });
-        }
-
         // wire collect button
         const collectBtn = document.getElementById('collect-button');
         if (collectBtn) {
@@ -637,24 +686,100 @@ def get_javascript_html():
 
         // start polling
         fetchDataAndUpdate();
+        fetchBatchesAndUpdate();
         setInterval(fetchDataAndUpdate, POLLING_INTERVAL_MS);
+        setInterval(fetchBatchesAndUpdate, 2000); // Update batches every 2 seconds
       });
 
       async function sendCollectCommand() {
         try {
+          // Read current field values
+          const startInput = document.getElementById('sample-start');
+          const stopInput = document.getElementById('sample-stop');
+          
+          if (!startInput || !stopInput) {
+            console.error('Sample range input fields not found');
+            return;
+          }
+          
+          const start = parseInt(startInput.value);
+          const stop = parseInt(stopInput.value);
+          
+          // Validate range
+          if (isNaN(start) || isNaN(stop)) {
+            alert('Please enter valid numbers for both start and stop samples.');
+            return;
+          }
+          
+          if (stop <= start) {
+            alert('Stop sample must be greater than start sample.');
+            return;
+          }
+          
+          console.log(`Collecting samples from ${start} to ${stop}`);
+          
           const res = await fetch('/trigger_collect', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              sample_start: currentSampleStart,
-              sample_stop: currentSampleStop
+              sample_start: start,
+              sample_stop: stop
             })
           });
-          if (!res.ok) console.error('POST /trigger_collect →', res.status);
+          
+          if (!res.ok) {
+            const errorData = await res.json().catch(() => ({ error: 'Unknown error' }));
+            console.error('POST /trigger_collect →', res.status, errorData);
+            alert(`Error: ${errorData.error || 'Failed to send collect command'}`);
+          } else {
+            const responseData = await res.json();
+            console.log('Collect command sent successfully:', responseData);
+          }
         } catch (err) {
           console.error('Error sending collect command', err);
+          alert('Error sending collect command: ' + err.message);
+        }
+      }
+
+      async function fetchBatchesAndUpdate() {
+        try {
+          const res = await fetch('/batches');
+          if (!res.ok) throw new Error(res.status);
+          const data = await res.json();
+
+          const batchesList = document.getElementById('batches-list');
+          if (!batchesList) return;
+
+          if (data.batches.length === 0) {
+            batchesList.innerHTML = '<p style="color: #666;">No batches collected yet</p>';
+          } else {
+            let html = '<table style="width: 100%; border-collapse: collapse; font-size: 12px;"><thead><tr style="background-color: #f5f5f5;"><th style="padding: 8px; text-align: left;">Batch #</th><th style="padding: 8px; text-align: left;">Time</th><th style="padding: 8px; text-align: left;">Samples</th><th style="padding: 8px; text-align: left;">Download</th></tr></thead><tbody>';
+            
+            data.batches.forEach(batch => {
+              html += `<tr>
+                <td style="padding: 8px;">#${batch.id}</td>
+                <td style="padding: 8px;">${batch.timestamp_iso}</td>
+                <td style="padding: 8px;">${batch.sample_count.toLocaleString()}</td>
+                <td style="padding: 8px;"><a href="/download_batch/${batch.id}" class="button download" style="padding: 4px 8px; font-size: 11px; text-decoration: none;">Download CSV</a></td>
+              </tr>`;
+            });
+            
+            html += '</tbody></table>';
+            
+            if (data.capture_active) {
+              html += `<p style="color: #ff6600; font-weight: bold; margin-top: 10px;">Collecting batch #${data.current_batch_id}... (${data.current_batch_samples} samples captured)</p>`;
+            }
+            
+            batchesList.innerHTML = html;
+          }
+        } catch (err) {
+          console.error('fetchBatches error', err);
+          const batchesList = document.getElementById('batches-list');
+          if (batchesList) {
+            batchesList.innerHTML = '<p style="color: #ff0000;">Error loading batches</p>';
+          }
         }
       }
 
@@ -977,34 +1102,29 @@ def index_page():
 
 
 
-          <h2>Data Logging</h2>
+          <h2>Data Collection</h2>
           <div class="button-group">
-            <form action="/download_csv" method="get" style="display:inline;">
-              <button type="submit" class="button download">Download Logged Data (CSV)</button>
-            </form>
-          </div>
-          
-          <h3>Sample Collection Range</h3>
-          <div class="button-group">
-            <form id="sample-range-form" style="display:inline-block; margin: 10px 0;">
-              <label for="sample-start" style="margin-right: 10px;">Start Sample:</label>
-              <input type="number" id="sample-start" name="sample_start" value="-50000" 
+            <h3>Collect Data Batch</h3>
+            <div style="margin: 10px 0;">
+              <label for="sample-start" style="margin-right: 10px;">Start at sample:</label>
+              <input type="number" id="sample-start" name="sample_start" value="-1000" 
                      style="width: 100px; padding: 5px; margin-right: 15px;">
               
-              <label for="sample-stop" style="margin-right: 10px;">Stop Sample:</label>
-              <input type="number" id="sample-stop" name="sample_stop" value="50000" 
+              <label for="sample-stop" style="margin-right: 10px;">End at sample:</label>
+              <input type="number" id="sample-stop" name="sample_stop" value="1000" 
                      style="width: 100px; padding: 5px; margin-right: 15px;">
-              
-              <button type="button" id="update-range-button" class="action">Update Range</button>
-            </form>
+            </div>
             <p style="font-size: 12px; color: #666; margin: 5px 0;">
-              Current range: <span id="current-range-display">-50000 to 50000</span>
+              The system maintains a continuous data buffer. Sample 0 represents the moment you click "Collect".<br>
+              Use negative numbers to capture data from before you clicked, positive numbers for after.<br>
+              <strong>Example:</strong> To capture 0.5 seconds before and after, use -5000 to +5000 (10,000 samples/sec)
             </p>
             <div style="margin-top: 15px;">
-              <button type="button" id="collect-button" class="button download">COLLECT Samples</button>
-              <p style="font-size: 12px; color: #666; margin: 5px 0;">
-                Collects samples using the current range without firing the actuator
-              </p>
+              <button type="button" id="collect-button" class="button download">Collect Data</button>
+            </div>
+          <hr style="width: 95%; margin: 20px auto; border: 0; border-top: 1px solid #ccc;">
+            <div id="batches-list" style="margin: 10px 0;">
+              <p style="color: #666;">Loading batches...</p>
             </div>
           </div>
 
@@ -1142,6 +1262,8 @@ def handle_trigger_fire():
 @app.route('/trigger_collect', methods=['POST'])
 def handle_trigger_collect():
     """Collect samples with timing window - bypasses StateManager"""
+    global batch_capture_active, current_batch_id, current_batch_samples, batch_capture_start_time, next_batch_id
+    
     try:
         if request.is_json:
             data = request.get_json()
@@ -1151,22 +1273,128 @@ def handle_trigger_collect():
             # Validate range
             if sample_stop <= sample_start:
                 return jsonify(error="Stop must be greater than Start"), 400
+            
+            # Start batch capture mode
+            with batches_lock:
+                if batch_capture_active:
+                    return jsonify(error="Another batch collection is already in progress"), 400
                 
+                batch_capture_active = True
+                current_batch_id = next_batch_id
+                next_batch_id += 1
+                current_batch_samples.clear()
+                batch_capture_start_time = time.time()
+                
+            print(f"[BATCH] Starting batch {current_batch_id} collection: {sample_start} to {sample_stop}")
+            
             # Send collect command with range parameters
             send_collect_command_with_range(sample_start, sample_stop)
             return jsonify(status="collect_command_sent", 
+                         batch_id=current_batch_id,
                          sample_start=sample_start, 
                          sample_stop=sample_stop)
         else:
             # Fallback for form-based requests (use default range)
+            with batches_lock:
+                if batch_capture_active:
+                    return redirect(url_for('index_page'))
+                
+                batch_capture_active = True
+                current_batch_id = next_batch_id
+                next_batch_id += 1
+                current_batch_samples.clear()
+                batch_capture_start_time = time.time()
+                
             send_collect_command_with_range(-50000, 50000)
             return redirect(url_for('index_page'))
     except Exception as e:
         print(f"Error in handle_trigger_collect: {e}")
+        # Reset batch capture state on error
+        with batches_lock:
+            batch_capture_active = False
+            current_batch_id = None
+            current_batch_samples.clear()
+            batch_capture_start_time = None
+            
         if request.is_json:
             return jsonify(error=str(e)), 500
         else:
             return redirect(url_for('index_page'))
+
+
+@app.route('/batches')
+def get_batches():
+    """Return list of available collection batches"""
+    with batches_lock:
+        batch_list = []
+        for batch_id, batch_data in collection_batches.items():
+            batch_list.append({
+                'id': batch_data['id'],
+                'timestamp': batch_data['timestamp'],
+                'timestamp_iso': datetime.fromtimestamp(batch_data['timestamp']).strftime('%Y-%m-%d %H:%M:%S'),
+                'sample_count': batch_data['sample_count']
+            })
+        
+        # Sort by timestamp (newest first)
+        batch_list.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        return jsonify({
+            'batches': batch_list,
+            'capture_active': batch_capture_active,
+            'current_batch_id': current_batch_id,
+            'current_batch_samples': len(current_batch_samples) if current_batch_samples else 0
+        })
+
+
+@app.route('/download_batch/<int:batch_id>')
+def download_batch(batch_id):
+    """Download a specific collection batch as CSV"""
+    with batches_lock:
+        if batch_id not in collection_batches:
+            return jsonify(error="Batch not found"), 404
+        
+        batch_data = collection_batches[batch_id]
+    
+    csv_fieldnames = LOGGING_DATA_FIELDS
+    float_fields_to_format = [
+        'switch_voltage_kv', 'switch_current_a', 'output_voltage_a_kv',
+        'output_voltage_b_kv', 'temperature_1_degc'
+    ]
+
+    def fmt_row(src):
+        out = {}
+        for f in csv_fieldnames:
+            v = src.get(f)
+            if f == 'timestamp':
+                out[f] = (datetime.fromtimestamp(v).strftime('%Y-%m-%d %H:%M:%S.%f')
+                          if isinstance(v, (int, float)) else "")
+            elif f in float_fields_to_format:
+                out[f] = (f"{v:.4f}" if isinstance(v, (int, float)) else "")
+            else:
+                out[f] = v if v is not None else ""
+        return out
+
+    def generate():
+        # csv writer + reusable buffer
+        buf = io.StringIO(newline='')
+        writer = csv.DictWriter(buf, fieldnames=csv_fieldnames)
+
+        # Write header
+        writer.writeheader()
+        yield buf.getvalue()
+        buf.seek(0); buf.truncate(0)
+
+        # Write batch samples
+        for sample in batch_data['samples']:
+            writer.writerow(fmt_row(sample))
+            yield buf.getvalue()
+            buf.seek(0); buf.truncate(0)
+
+    ts = datetime.fromtimestamp(batch_data['timestamp']).strftime('%Y%m%d_%H%M%S')
+    fname = f"remc_batch_{batch_id}_{ts}.csv"
+    return Response(generate(),
+                    mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={fname}"})
 
 
 @app.route('/set_switch', methods=['POST'])
@@ -1234,6 +1462,8 @@ if __name__ == "__main__":
     print("Starting UDP listener thread for telemetry...")
     telemetry_listener = threading.Thread(target=udp_listener_thread, daemon=True)
     telemetry_listener.start()
+    
+    
 # Data logging thread disabled (logging per-sample occurs in UDP listener)
 # print(f"Starting data logging thread (interval: {DATA_LOGGING_INTERVAL_SECONDS}s)...")
 # data_logger = threading.Thread(target=data_logging_thread_function, daemon=True)

@@ -235,6 +235,9 @@ size_t SampleCollector::getRingIndex(int relativeIndex, size_t referenceSampleCo
 void SampleCollector::extractRequestedSamples() {
     Serial.println("[SampleCollector] Extracting requested samples...");
     
+    // Tag all outgoing samples as collected samples
+    UdpManager::startSendingCollectedSamples();
+    
     // Reset samples collected counter
     samplesCollected = 0;
     
@@ -271,6 +274,10 @@ void SampleCollector::extractRequestedSamples() {
     if (samplesCollected % 46 != 0) {
         UdpManager::flushSamples();
     }
+    
+    // Stop tagging samples as collected and send end marker
+    UdpManager::stopSendingCollectedSamples();
+    UdpManager::sendBatchEndMarker();
     
     Serial.print("[SampleCollector] Extracted and sent ");
     Serial.print(samplesCollected);
