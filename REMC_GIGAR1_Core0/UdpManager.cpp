@@ -3,6 +3,7 @@
 #include "Config.h"
 #include "StateManager.h"
 #include "PinConfig.h"
+#include "SampleCollector.h"
 #include <Arduino.h>
 #include <Ethernet.h>
 #include <EthernetUdp.h>
@@ -25,7 +26,9 @@ static const uint16_t NTP_PORT = Config::NTP_PORT;
 
 // Neutrino header constants
 static const uint32_t MSG_ID = 1;  // Atomic
-static const uint32_t FLAGS = 0;
+static const uint32_t FLAGS_NORMAL = 0;
+static const uint32_t FLAGS_COLLECTED_SAMPLES = 1;  // Tag for collected samples
+static const uint32_t FLAGS_BATCH_END = 2;  // Tag for end of batch
 static const size_t FRAG_LEN = 16;
 static const size_t HEADER_SIZE = 64;
 
@@ -95,6 +98,7 @@ uint32_t currentSchemaFrag = 0;
 // Dynamic bundling - collect samples from current loop iteration
 static TelemetrySample s_sample_bundle[MAX_SAMPLES_PER_BUNDLE];
 static size_t s_bundle_count = 0;
+static bool s_sending_collected_samples = false;
 
 void calcSchemaHash() {
   char* buf = (char*)malloc(strlen(schema) + 1);
@@ -280,6 +284,35 @@ void sendPacketIfReady() {
   flushSamples();
 }
 
+void startSendingCollectedSamples() {
+  s_sending_collected_samples = true;
+}
+
+void stopSendingCollectedSamples() {
+  s_sending_collected_samples = false;
+}
+
+void sendBatchEndMarker() {
+  // Send an empty packet with FLAGS_BATCH_END to signal batch completion
+  if (s_bundle_count > 0) {
+    flushSamples();  // Flush any remaining samples first
+  }
+  
+  // Send empty packet with batch end flag
+  uint8_t packet[HEADER_SIZE];
+  memset(packet, 0, HEADER_SIZE);
+  uint32_t* h = reinterpret_cast<uint32_t*>(packet);
+  h[0] = htonl_custom(MSG_ID);
+  h[1] = htonl_custom(FLAGS_BATCH_END);
+  
+  if (udp.beginPacket(PC_MCAST, UDP_PORT) == 1) {
+    if (udp.write(packet, HEADER_SIZE) > 0) {
+      udp.endPacket();
+    }
+  }
+  Serial.println("[UDP] Sent batch end marker");
+}
+
 void onSampleTick(uint32_t irq_us) {
   // This function is now deprecated - use addSample() instead
   // Keeping for compatibility but it won't be called
@@ -300,6 +333,24 @@ void processIncoming() {
         case 0x01: StateManager::requestArm(); break;
         case 0x02: StateManager::triggerSoftwareActuate(); break;
         case 0x03: StateManager::requestDisarm(); break;
+        case 0x04: 
+          // Collect command with timing window - directly starts SampleCollector
+          if (len >= 64 + 9) { // 1 byte command + 4 bytes start + 4 bytes stop
+            // Parse range parameters (little-endian int32)
+            int32_t start = *((int32_t*)(buf + 65));
+            int32_t stop = *((int32_t*)(buf + 69));
+            
+            Serial.print(F("UdpManager: Collect command with range - start: "));
+            Serial.print(start);
+            Serial.print(F(", stop: "));
+            Serial.println(stop);
+            
+            // Directly start sample collection with timing window
+            SampleCollector::startGathering(start, stop);
+          } else {
+            Serial.println(F("UdpManager: Collect command missing range parameters"));
+          }
+          break;
         case 0x11: StateManager::manualActuatorControl(ACT_FWD); break;
         case 0x12: StateManager::manualActuatorControl(ACT_STOP); break;
         case 0x13: StateManager::manualActuatorControl(ACT_BWD); break;
@@ -327,7 +378,7 @@ void sendNeutrinoPacket() {
   uint8_t packet[MAX_PACKET_SIZE];
   uint32_t* h = reinterpret_cast<uint32_t*>(packet);
   h[0] = htonl_custom(MSG_ID);
-  h[1] = htonl_custom(FLAGS);
+  h[1] = htonl_custom(s_sending_collected_samples ? FLAGS_COLLECTED_SAMPLES : FLAGS_NORMAL);
   h[2] = htonl_custom(schemaNumFrags);
   h[3] = htonl_custom(1);  // NUM_ATOMIC_FRAGS
   memcpy(packet + 16, schemaHash, 16);

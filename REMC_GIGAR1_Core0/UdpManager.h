@@ -28,6 +28,11 @@ namespace UdpManager {
   EthernetUDP* getUdpObject();
   EthernetUDP* getNTPUdpObject();
   
+  // Collected samples tagging
+  void startSendingCollectedSamples();
+  void stopSendingCollectedSamples();
+  void sendBatchEndMarker();
+  
   // Legacy functions (deprecated/unused)
   bool isPacketReady();
   void sendPacketIfReady(); 
